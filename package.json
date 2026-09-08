@@ -1,0 +1,17 @@
+{
+  "name": "powercalc-pakistan",
+  "version": "1.0.0",
+  "description": "Electrical Load & Solar Sizing Calculator for Pakistan — mobile-first engineering web app",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js",
+    "test:watch": "node --test --watch test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": ["electrical", "solar", "pv", "load-calculation", "cable-sizing", "pakistan", "boq"],
+  "license": "MIT"
+}
