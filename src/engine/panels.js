@@ -3,7 +3,7 @@
  * @module engine/panels
  */
 
-import { rectangleFromMm, mmToM, sqmToSqft, mToFt, toRadians, toDegrees } from './units.js';
+import { rectangleFromMm, mmToM, sqmToSqft, mToFt, toRadians } from './units.js';
 import { checkNumber, hasErrors, warn } from './validation.js';
 import { MOUNTING_TYPES, SOLAR_DECLINATION_DEG, PAKISTAN_CITIES } from './constants.js';
 

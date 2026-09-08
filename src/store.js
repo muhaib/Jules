@@ -143,19 +143,22 @@ export function createDemoProject(settings) {
     client: 'United Bank Limited',
     location: 'Multan, Pakistan',
   });
-  p.notes = 'Demo project shipped with the app. Bank branch: air conditioning, '
-    + 'lighting, IT, CCTV and general power, with a rooftop PV system sized to '
-    + 'cover the daytime load.';
+  p.notes = 'Demo project shipped with the app. A bank branch in Multan: banking-hall '
+    + 'air conditioning, a server room, UPS, lighting, IT, CCTV and general power, with a '
+    + 'rooftop PV system sized to cover the daytime load. The schedule is tuned so the '
+    + 'maximum demand lands at 43 kW on a 400 V three-phase supply at a power factor of '
+    + '0.90 — about 69 A — which is the worked example the calculators are checked against.';
   p.inputs.load.loads = [
-    createLoadItem({ name: 'Split AC units', category: 'hvac', quantity: 6, ratedPower: 2, unit: 'kW', phase: 3, powerFactor: 0.9, diversityFactor: 0.9, hoursPerDay: 8 }),
-    createLoadItem({ name: 'LED lighting', category: 'lighting', quantity: 40, ratedPower: 40, unit: 'W', phase: 1, powerFactor: 0.95, diversityFactor: 0.9, hoursPerDay: 10 }),
-    createLoadItem({ name: 'Computers and terminals', category: 'itEquipment', quantity: 20, ratedPower: 150, unit: 'W', phase: 1, powerFactor: 0.95, diversityFactor: 0.8, hoursPerDay: 9 }),
-    createLoadItem({ name: 'CCTV and access control', category: 'security', quantity: 1, ratedPower: 500, unit: 'W', phase: 1, powerFactor: 0.9, diversityFactor: 1, hoursPerDay: 24 }),
+    createLoadItem({ name: 'Split AC units (banking hall)', category: 'hvac', quantity: 11, ratedPower: 2, unit: 'kW', phase: 3, powerFactor: 0.88, diversityFactor: 0.9, hoursPerDay: 8 }),
     createLoadItem({ name: 'Server room precision AC', category: 'hvac', quantity: 1, ratedPower: 5, unit: 'kW', phase: 3, powerFactor: 0.9, diversityFactor: 1, hoursPerDay: 24 }),
     createLoadItem({ name: 'UPS (branch systems)', category: 'ups', quantity: 1, ratedPower: 10, unit: 'kVA', phase: 3, powerFactor: 0.9, diversityFactor: 0.8, hoursPerDay: 10 }),
-    createLoadItem({ name: 'General power sockets', category: 'socket', quantity: 30, ratedPower: 300, unit: 'W', phase: 1, powerFactor: 0.9, diversityFactor: 0.5, hoursPerDay: 8 }),
-    createLoadItem({ name: 'Water pump', category: 'motor', quantity: 1, ratedPower: 3, unit: 'HP', phase: 3, powerFactor: 0.85, diversityFactor: 0.6, hoursPerDay: 3 }),
+    createLoadItem({ name: 'General power sockets', category: 'socket', quantity: 20, ratedPower: 300, unit: 'W', phase: 1, powerFactor: 0.9, diversityFactor: 0.5, hoursPerDay: 8 }),
+    createLoadItem({ name: 'Computers and teller terminals', category: 'itEquipment', quantity: 20, ratedPower: 150, unit: 'W', phase: 1, powerFactor: 0.95, diversityFactor: 0.8, hoursPerDay: 9 }),
+    createLoadItem({ name: 'LED lighting', category: 'lighting', quantity: 50, ratedPower: 40, unit: 'W', phase: 1, powerFactor: 0.95, diversityFactor: 0.9, hoursPerDay: 10 }),
     createLoadItem({ name: 'Signage and facade lighting', category: 'lighting', quantity: 1, ratedPower: 1.2, unit: 'kW', phase: 1, powerFactor: 0.95, diversityFactor: 1, hoursPerDay: 6 }),
+    createLoadItem({ name: 'CCTV and access control', category: 'security', quantity: 1, ratedPower: 500, unit: 'W', phase: 1, powerFactor: 0.9, diversityFactor: 1, hoursPerDay: 24 }),
+    createLoadItem({ name: 'ATM and cash machines', category: 'itEquipment', quantity: 2, ratedPower: 600, unit: 'W', phase: 1, powerFactor: 0.95, diversityFactor: 1, hoursPerDay: 24 }),
+    createLoadItem({ name: 'Water pump', category: 'motor', quantity: 1, ratedPower: 2, unit: 'HP', phase: 3, powerFactor: 0.85, diversityFactor: 0.6, hoursPerDay: 3 }),
   ];
   return p;
 }
@@ -172,8 +175,23 @@ function freshState() {
   };
 }
 
+/**
+ * Whether this environment offers a usable localStorage. Node (used by the test
+ * suite) has none, and some browsers throw on access in private mode rather
+ * than returning null — both are handled the same way: run in memory.
+ * @returns {boolean}
+ */
+function storageAvailable() {
+  try {
+    return typeof localStorage !== 'undefined' && localStorage !== null;
+  } catch {
+    return false;
+  }
+}
+
 /** @returns {object} */
 function load() {
+  if (!storageAvailable()) return freshState();
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return freshState();
@@ -201,6 +219,7 @@ const listeners = new Set();
 let persistFailed = false;
 
 function persist() {
+  if (!storageAvailable()) return;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     persistFailed = false;

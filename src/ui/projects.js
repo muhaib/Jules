@@ -8,7 +8,7 @@ import {
 } from './components.js';
 import {
   getProjects, getActiveProject, setActiveProject, addProject, duplicateProject,
-  deleteProject, updateActiveProject, setField, toEngineInputs, PROJECT_STATUSES,
+  deleteProject, setField, toEngineInputs, PROJECT_STATUSES,
 } from '../store.js';
 import { calculateProject } from '../engine/index.js';
 import { projectSummary } from './dashboard.js';
