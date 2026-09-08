@@ -1,0 +1,133 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --canvas: 246 247 249;
+    --surface: 255 255 255;
+    --raised: 249 250 251;
+    --line: 226 231 237;
+    --ink: 17 24 39;
+    --muted: 90 100 116;
+    --faint: 138 148 163;
+
+    --accent: 21 74 145;
+    --accent-soft: 232 240 250;
+    --accent-ink: 255 255 255;
+
+    --ok: 21 128 61;
+    --warn: 180 121 8;
+    --bad: 190 44 44;
+    --crit: 145 24 62;
+    --info: 30 100 160;
+
+    --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-canvas text-ink font-sans antialiased;
+    font-size: 14px;
+  }
+
+  /* Inputs never zoom the viewport on iOS during field inspections. */
+  @media (max-width: 640px) {
+    input,
+    select,
+    textarea {
+      font-size: 16px;
+    }
+  }
+
+  * {
+    @apply border-line;
+  }
+
+  :focus-visible {
+    @apply outline-none ring-2 ring-accent/60 ring-offset-1 ring-offset-surface;
+  }
+
+  table {
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-lg border border-line bg-surface shadow-card;
+  }
+
+  .card-pad {
+    @apply p-4 sm:p-5;
+  }
+
+  .label {
+    @apply block text-xs font-medium text-muted mb-1.5;
+  }
+
+  .input {
+    @apply w-full rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink
+           placeholder:text-faint transition-colors
+           focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent
+           disabled:cursor-not-allowed disabled:bg-raised disabled:text-muted;
+  }
+
+  .btn {
+    @apply inline-flex select-none items-center justify-center gap-2 rounded-md border
+           px-3.5 py-2 text-sm font-medium transition-colors
+           disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply btn border-accent bg-accent text-accent-ink hover:bg-accent/90;
+  }
+
+  .btn-secondary {
+    @apply btn border-line bg-surface text-ink hover:bg-raised;
+  }
+
+  .btn-danger {
+    @apply btn border-bad bg-bad text-white hover:bg-bad/90;
+  }
+
+  .btn-ghost {
+    @apply btn border-transparent bg-transparent text-muted hover:bg-raised hover:text-ink;
+  }
+
+  .btn-lg {
+    @apply px-4 py-3 text-base;
+  }
+
+  .th {
+    @apply whitespace-nowrap border-b border-line bg-raised px-3 py-2.5 text-left
+           text-2xs font-semibold uppercase tracking-wider text-muted;
+  }
+
+  .td {
+    @apply border-b border-line px-3 py-2.5 align-middle text-sm text-ink;
+  }
+
+  .row-link {
+    @apply cursor-pointer transition-colors hover:bg-accent-soft/60;
+  }
+
+  .section-title {
+    @apply text-sm font-semibold text-ink;
+  }
+
+  .kicker {
+    @apply text-2xs font-semibold uppercase tracking-wider text-faint;
+  }
+}
+
+/* Print: PDF is the primary report format, but browser print should still be sane. */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+}

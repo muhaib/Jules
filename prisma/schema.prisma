@@ -1,0 +1,737 @@
+// BranchCheck — Branch Inspection, Facility Compliance & Corrective Action Management
+//
+// Design notes
+//  * Every tenant-owned row carries organizationId. Application-level guards scope
+//    all reads/writes; the column exists so isolation is enforceable and auditable.
+//  * Inspection results are immutable once submitted. Template text is snapshotted
+//    onto responses so later template edits cannot rewrite history.
+//  * Findings carry their own lifecycle and are never deleted — only closed or
+//    cancelled, with an audit trail behind every transition.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Role {
+  SUPER_ADMIN
+  REGIONAL_MANAGER
+  INSPECTOR
+  BRANCH_MANAGER
+  VERIFIER
+}
+
+enum BranchStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum InspectionStatus {
+  DRAFT // created by assigner, not yet released
+  ASSIGNED // waiting for the inspector to start
+  IN_PROGRESS // inspector has begun answering
+  SUBMITTED // locked; score computed; findings generated
+  CANCELLED
+}
+
+enum ResponseResult {
+  COMPLIANT
+  PARTIALLY_COMPLIANT
+  NON_COMPLIANT
+  NOT_APPLICABLE
+}
+
+enum Severity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+/// Corrective-action lifecycle.
+/// OPEN -> ASSIGNED -> IN_PROGRESS -> EVIDENCE_SUBMITTED -> UNDER_VERIFICATION -> CLOSED
+/// UNDER_VERIFICATION -> REJECTED -> IN_PROGRESS (rework loop)
+enum FindingStatus {
+  OPEN
+  ASSIGNED
+  IN_PROGRESS
+  EVIDENCE_SUBMITTED
+  UNDER_VERIFICATION
+  REJECTED
+  CLOSED
+  CANCELLED
+}
+
+enum EvidenceKind {
+  INSPECTION // captured while inspecting (the "before" state)
+  BEFORE // explicitly tagged before-remediation
+  AFTER // remediation proof
+  VERIFICATION
+}
+
+enum MediaType {
+  PHOTO
+  VIDEO
+  DOCUMENT
+}
+
+enum CorrectiveActionVerdict {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+enum NotificationType {
+  FINDING_CREATED
+  FINDING_ASSIGNED
+  FINDING_DUE_SOON
+  FINDING_OVERDUE
+  EVIDENCE_SUBMITTED
+  EVIDENCE_REJECTED
+  FINDING_CLOSED
+  INSPECTION_ASSIGNED
+  INSPECTION_SUBMITTED
+  ESCALATION
+}
+
+enum NotificationLevel {
+  CRITICAL
+  WARNING
+  DUE
+  INFO
+  SUCCESS
+}
+
+// ---------------------------------------------------------------------------
+// Tenancy
+// ---------------------------------------------------------------------------
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  legalName String?
+  logoUrl   String?
+  timezone  String   @default("UTC")
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  settings         OrganizationSettings?
+  severityPolicies SeverityPolicy[]
+  users            User[]
+  regions          Region[]
+  clusters         Cluster[]
+  branches         Branch[]
+  templates        InspectionTemplate[]
+  inspections      Inspection[]
+  findings         Finding[]
+  evidence         Evidence[]
+  notifications    Notification[]
+  auditLogs        AuditLog[]
+
+  @@map("organizations")
+}
+
+/// Admin-configurable scoring and workflow rules. One row per organization.
+model OrganizationSettings {
+  id             String @id @default(cuid())
+  organizationId String @unique
+
+  // Scoring weights, expressed as a percentage of the item's weight.
+  scoreCompliant    Int @default(100)
+  scorePartial      Int @default(50)
+  scoreNonCompliant Int @default(0)
+  // NOT_APPLICABLE is always excluded from the denominator.
+
+  // Grade bands (lower bound, inclusive).
+  bandExcellent Int @default(90)
+  bandGood      Int @default(80)
+  bandNeedsWork Int @default(70)
+
+  // Findings flagged as recurring when the same checklist item fails at the same
+  // branch this many times (including the new one) inside the lookback window.
+  recurrenceThreshold  Int @default(2)
+  recurrenceWindowDays Int @default(365)
+
+  // A finding is "due soon" this many hours before its deadline.
+  dueSoonHours Int @default(48)
+
+  // Require a photo whenever an item is marked non-compliant.
+  requirePhotoOnNonCompliance Boolean @default(true)
+
+  // Escalation ladder toggles.
+  escalateToBranchManager   Boolean @default(true)
+  escalateToRegionalManager Boolean @default(true)
+  escalateToHeadOffice      Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("organization_settings")
+}
+
+/// Default remediation deadline per severity, configurable per organization.
+model SeverityPolicy {
+  id                 String   @id @default(cuid())
+  organizationId     String
+  severity           Severity
+  /// Hours allowed to remediate, measured from finding creation.
+  dueHours           Int
+  /// Hours past the deadline before the escalation ladder advances one step.
+  escalateEveryHours Int      @default(24)
+  colorHex           String
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, severity])
+  @@map("severity_policies")
+}
+
+// ---------------------------------------------------------------------------
+// Org structure
+// ---------------------------------------------------------------------------
+
+model Region {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  code           String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  clusters     Cluster[]
+  branches     Branch[]
+  assignments  UserRegion[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+  @@map("regions")
+}
+
+model Cluster {
+  id             String   @id @default(cuid())
+  organizationId String
+  regionId       String
+  name           String
+  code           String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  region       Region       @relation(fields: [regionId], references: [id], onDelete: Cascade)
+  branches     Branch[]
+
+  @@unique([organizationId, code])
+  @@index([regionId])
+  @@map("clusters")
+}
+
+model Branch {
+  id             String       @id @default(cuid())
+  organizationId String
+  regionId       String
+  clusterId      String?
+  name           String
+  code           String
+  city           String
+  address        String
+  contactNumber  String?
+  email          String?
+  openingDate    DateTime?
+  branchType     String       @default("Branch")
+  status         BranchStatus @default(ACTIVE)
+  latitude       Float?
+  longitude      Float?
+  managerId      String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  region       Region       @relation(fields: [regionId], references: [id])
+  cluster      Cluster?     @relation(fields: [clusterId], references: [id])
+  manager      User?        @relation("BranchManager", fields: [managerId], references: [id])
+  inspections  Inspection[]
+  findings     Finding[]
+  assignments  UserBranch[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId, status])
+  @@index([regionId])
+  @@map("branches")
+}
+
+// ---------------------------------------------------------------------------
+// Identity & access
+// ---------------------------------------------------------------------------
+
+model User {
+  id             String    @id @default(cuid())
+  organizationId String
+  email          String
+  name           String
+  passwordHash   String
+  role           Role
+  phone          String?
+  jobTitle       String?
+  isActive       Boolean   @default(true)
+  lastLoginAt    DateTime?
+  /// Per-user notification channel preferences, keyed by NotificationType.
+  notifyPrefs    Json      @default("{}")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  managedBranches   Branch[]             @relation("BranchManager")
+  branchAssignments UserBranch[]
+  regionAssignments UserRegion[]
+  sessions          Session[]
+  resetTokens       PasswordResetToken[]
+
+  inspectionsAssigned Inspection[] @relation("InspectionInspector")
+  inspectionsCreated  Inspection[] @relation("InspectionAssigner")
+
+  findingsAssigned Finding[] @relation("FindingAssignee")
+  findingsCreated  Finding[] @relation("FindingCreator")
+  findingsClosed   Finding[] @relation("FindingCloser")
+
+  correctiveSubmitted CorrectiveAction[] @relation("CorrectiveSubmitter")
+  correctiveVerified  CorrectiveAction[] @relation("CorrectiveVerifier")
+
+  evidenceUploaded Evidence[]
+  notifications    Notification[]
+  auditLogs        AuditLog[]
+
+  @@unique([organizationId, email])
+  @@index([organizationId, role])
+  @@map("users")
+}
+
+/// Scopes an inspector / branch manager to specific branches.
+model UserBranch {
+  id       String @id @default(cuid())
+  userId   String
+  branchId String
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, branchId])
+  @@index([branchId])
+  @@map("user_branches")
+}
+
+/// Scopes a regional / cluster manager to whole regions.
+model UserRegion {
+  id       String @id @default(cuid())
+  userId   String
+  regionId String
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  region Region @relation(fields: [regionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, regionId])
+  @@map("user_regions")
+}
+
+/// Server-side session records so sessions can be listed and revoked.
+model Session {
+  id         String    @id @default(cuid())
+  userId     String
+  tokenHash  String    @unique
+  userAgent  String?
+  ipAddress  String?
+  createdAt  DateTime  @default(now())
+  lastSeenAt DateTime  @default(now())
+  expiresAt  DateTime
+  revokedAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+/// Catalogue of permission codes, seeded from the application permission matrix.
+model Permission {
+  id          String @id @default(cuid())
+  code        String @unique
+  description String
+  category    String
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+/// Role -> permission grants. Seeded from the default matrix; editable by admins.
+model RolePermission {
+  id           String @id @default(cuid())
+  role         Role
+  permissionId String
+
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([role, permissionId])
+  @@map("role_permissions")
+}
+
+// ---------------------------------------------------------------------------
+// Templates
+// ---------------------------------------------------------------------------
+
+model InspectionTemplate {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?
+  branchType     String?
+  version        Int      @default(1)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  categories   InspectionCategory[]
+  inspections  Inspection[]
+
+  @@index([organizationId, isActive])
+  @@map("inspection_templates")
+}
+
+model InspectionCategory {
+  id         String  @id @default(cuid())
+  templateId String
+  name       String
+  /// Display + report ordering.
+  position   Int
+  /// Relative weight of this category when rolling up to the overall score.
+  weight     Int     @default(1)
+  isActive   Boolean @default(true)
+
+  template InspectionTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  items    ChecklistItem[]
+
+  @@index([templateId, position])
+  @@map("inspection_categories")
+}
+
+model ChecklistItem {
+  id                 String   @id @default(cuid())
+  categoryId         String
+  text               String
+  guidance           String?
+  position           Int
+  weight             Int      @default(1)
+  isMandatory        Boolean  @default(true)
+  /// Severity applied automatically to findings raised from this item.
+  defaultSeverity    Severity @default(MEDIUM)
+  requirePhotoOnFail Boolean  @default(true)
+  isActive           Boolean  @default(true)
+
+  category  InspectionCategory   @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  responses InspectionResponse[]
+
+  @@index([categoryId, position])
+  @@map("checklist_items")
+}
+
+// ---------------------------------------------------------------------------
+// Inspections
+// ---------------------------------------------------------------------------
+
+model Inspection {
+  id             String           @id @default(cuid())
+  organizationId String
+  reference      String
+  branchId       String
+  templateId     String
+  inspectorId    String
+  assignedById   String?
+  status         InspectionStatus @default(ASSIGNED)
+
+  scheduledFor DateTime
+  startedAt    DateTime?
+  submittedAt  DateTime?
+
+  /// Overall compliance score, 0-100, null until submitted.
+  score            Float?
+  earnedPoints     Float?
+  applicablePoints Float?
+
+  totalItems        Int @default(0)
+  compliantCount    Int @default(0)
+  partialCount      Int @default(0)
+  nonCompliantCount Int @default(0)
+  naCount           Int @default(0)
+
+  /// Per-category scores, computed at submission: [{ categoryId, name, score, ... }]
+  categoryScores Json?
+
+  notes            String?
+  summary          String?
+  /// Immutable copy of the template as it stood when the inspection was created.
+  templateSnapshot Json?
+
+  latitude  Float?
+  longitude Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch       Branch             @relation(fields: [branchId], references: [id])
+  template     InspectionTemplate @relation(fields: [templateId], references: [id])
+  inspector    User               @relation("InspectionInspector", fields: [inspectorId], references: [id])
+  assignedBy   User?              @relation("InspectionAssigner", fields: [assignedById], references: [id])
+
+  responses InspectionResponse[]
+  findings  Finding[]
+
+  @@unique([organizationId, reference])
+  @@index([organizationId, status])
+  @@index([branchId, submittedAt])
+  @@index([inspectorId, status])
+  @@map("inspections")
+}
+
+model InspectionResponse {
+  id              String @id @default(cuid())
+  inspectionId    String
+  checklistItemId String
+
+  /// Snapshots so historical reports never change when a template is edited.
+  categoryName String
+  itemText     String
+  position     Int
+  weight       Int    @default(1)
+
+  result      ResponseResult?
+  observation String?
+  comment     String?
+  severity    Severity?
+
+  answeredAt DateTime?
+  latitude   Float?
+  longitude  Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  inspection    Inspection    @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  checklistItem ChecklistItem @relation(fields: [checklistItemId], references: [id])
+  evidence      Evidence[]
+  finding       Finding?
+
+  @@unique([inspectionId, checklistItemId])
+  @@index([inspectionId])
+  @@map("inspection_responses")
+}
+
+// ---------------------------------------------------------------------------
+// Findings & corrective actions
+// ---------------------------------------------------------------------------
+
+model Finding {
+  id             String  @id @default(cuid())
+  organizationId String
+  /// Human-facing reference, e.g. BR-2026-00451
+  number         String
+  branchId       String
+  inspectionId   String?
+  responseId     String? @unique
+
+  categoryName String
+  itemText     String
+  observation  String
+  severity     Severity
+  status       FindingStatus @default(OPEN)
+
+  assignedToId String?
+  createdById  String
+  dueDate      DateTime
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  startedAt           DateTime?
+  evidenceSubmittedAt DateTime?
+  closedAt            DateTime?
+  closedById          String?
+  closureNote         String?
+
+  /// Escalation ladder position: 0 responsible person, 1 branch manager,
+  /// 2 regional manager, 3 head office.
+  escalationLevel Int       @default(0)
+  lastEscalatedAt DateTime?
+
+  /// Stable key (branch + normalised checklist item) used to detect repeats.
+  recurrenceKey   String
+  isRecurring     Boolean @default(false)
+  recurrenceCount Int     @default(1)
+
+  rejectionCount Int @default(0)
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch       Branch              @relation(fields: [branchId], references: [id])
+  inspection   Inspection?         @relation(fields: [inspectionId], references: [id])
+  response     InspectionResponse? @relation(fields: [responseId], references: [id])
+  assignedTo   User?               @relation("FindingAssignee", fields: [assignedToId], references: [id])
+  createdBy    User                @relation("FindingCreator", fields: [createdById], references: [id])
+  closedBy     User?               @relation("FindingCloser", fields: [closedById], references: [id])
+
+  correctiveActions CorrectiveAction[]
+  evidence          Evidence[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status])
+  @@index([organizationId, severity, status])
+  @@index([branchId, status])
+  @@index([assignedToId, status])
+  @@index([recurrenceKey])
+  @@index([dueDate])
+  @@map("findings")
+}
+
+/// One remediation attempt against a finding. A rejection produces a new attempt,
+/// so the full rework history is preserved.
+model CorrectiveAction {
+  id        String @id @default(cuid())
+  findingId String
+  attempt   Int
+
+  description   String
+  actionTaken   String?
+  submittedById String
+  submittedAt   DateTime @default(now())
+
+  verdict         CorrectiveActionVerdict @default(PENDING)
+  verifiedById    String?
+  verifiedAt      DateTime?
+  verifierComment String?
+
+  finding     Finding @relation(fields: [findingId], references: [id], onDelete: Cascade)
+  submittedBy User    @relation("CorrectiveSubmitter", fields: [submittedById], references: [id])
+  verifiedBy  User?   @relation("CorrectiveVerifier", fields: [verifiedById], references: [id])
+
+  evidence Evidence[]
+
+  @@unique([findingId, attempt])
+  @@index([findingId])
+  @@map("corrective_actions")
+}
+
+model Evidence {
+  id             String @id @default(cuid())
+  organizationId String
+
+  responseId         String?
+  findingId          String?
+  correctiveActionId String?
+
+  kind      EvidenceKind
+  mediaType MediaType    @default(PHOTO)
+
+  /// Key in the configured object store (local dir or S3 bucket).
+  storageKey String
+  fileName   String
+  mimeType   String
+  sizeBytes  Int
+  checksum   String?
+  caption    String?
+
+  capturedAt DateTime @default(now())
+  latitude   Float?
+  longitude  Float?
+
+  uploadedById String
+  createdAt    DateTime @default(now())
+
+  organization     Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  response         InspectionResponse? @relation(fields: [responseId], references: [id], onDelete: Cascade)
+  finding          Finding?            @relation(fields: [findingId], references: [id], onDelete: Cascade)
+  correctiveAction CorrectiveAction?   @relation(fields: [correctiveActionId], references: [id], onDelete: Cascade)
+  uploadedBy       User                @relation(fields: [uploadedById], references: [id])
+
+  @@index([findingId])
+  @@index([responseId])
+  @@index([correctiveActionId])
+  @@map("evidence")
+}
+
+// ---------------------------------------------------------------------------
+// Notifications & audit
+// ---------------------------------------------------------------------------
+
+model Notification {
+  id             String            @id @default(cuid())
+  organizationId String
+  userId         String
+  type           NotificationType
+  level          NotificationLevel @default(INFO)
+  title          String
+  body           String
+  link           String?
+  entityType     String?
+  entityId       String?
+  readAt         DateTime?
+  createdAt      DateTime          @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@index([organizationId, createdAt])
+  @@map("notifications")
+}
+
+/// Append-only. Nothing in the application updates or deletes these rows.
+model AuditLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  actorId        String?
+  actorLabel     String
+  action         String
+  entityType     String
+  entityId       String
+  summary        String
+  before         Json?
+  after          Json?
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actor        User?        @relation(fields: [actorId], references: [id])
+
+  @@index([organizationId, createdAt])
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@map("audit_logs")
+}
