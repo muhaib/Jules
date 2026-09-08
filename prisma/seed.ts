@@ -151,7 +151,13 @@ async function main() {
   console.log('Flagging recurring findings…');
   const recurring = await flagRecurrence(org.id);
 
-  console.log('Generating notifications…');
+  console.log('Running the escalation sweep…');
+  // Use the production sweep rather than faking escalation levels, so the demo
+  // shows exactly what the scheduled job would produce.
+  const { runEscalationSweep } = await import('../src/lib/domain/escalation');
+  const sweep = await runEscalationSweep(org.id, NOW);
+
+  console.log('Generating assignment notifications…');
   await seedNotifications(org.id);
 
   const counts = await summary(org.id);
@@ -167,6 +173,7 @@ async function main() {
   console.log(`    closed          ${counts.closed}`);
   console.log(`    recurring       ${recurring}`);
   console.log(`  Evidence files    ${counts.evidence}`);
+  console.log(`  Escalated         ${sweep.escalated} (${sweep.overdueNotified} overdue alerts)`);
   console.log(`\n  Sign in with any account below and the password: ${DEMO_PASSWORD}`);
   for (const u of USERS) console.log(`    ${u.role.padEnd(17)} ${u.email}`);
   console.log(`    BRANCH_MANAGER    ${BRANCH_MANAGERS[0].email}`);
@@ -990,17 +997,17 @@ async function seedNotifications(organizationId: string) {
   });
 
   for (const f of recent) {
-    const overdue = f.dueDate.getTime() < NOW.getTime();
     const recipients = [f.assignedToId].filter((v): v is string => !!v);
     if (recipients.length === 0) continue;
 
+    // Overdue and due-soon alerts come from the escalation sweep, not from here.
     await prisma.notification.create({
       data: {
         organizationId,
         userId: recipients[0],
-        type: overdue ? 'FINDING_OVERDUE' : f.severity === 'CRITICAL' ? 'FINDING_CREATED' : 'FINDING_ASSIGNED',
-        level: overdue ? 'CRITICAL' : f.severity === 'CRITICAL' ? 'CRITICAL' : 'INFO',
-        title: overdue ? `Finding overdue: ${f.number}` : `Assigned to you: ${f.number}`,
+        type: f.severity === 'CRITICAL' ? 'FINDING_CREATED' : 'FINDING_ASSIGNED',
+        level: f.severity === 'CRITICAL' ? 'CRITICAL' : 'INFO',
+        title: f.severity === 'CRITICAL' ? `Critical finding ${f.number}` : `Assigned to you: ${f.number}`,
         body: `${f.branch.name} — ${f.itemText}`,
         link: `/findings/${f.id}`,
         entityType: 'Finding',
