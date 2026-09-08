@@ -1,6 +1,5 @@
 import 'server-only';
 
-import { createHash } from 'node:crypto';
 import type { FindingStatus, Prisma, PrismaClient, Severity } from '@prisma/client';
 
 import { prisma } from '@/lib/db';
@@ -9,6 +8,7 @@ import { audit } from '@/lib/audit';
 import type { SessionUser } from '@/lib/auth/session';
 import { branchAudience, notify } from '@/lib/domain/notify';
 import { orgConfig, type OrgConfig } from '@/lib/domain/settings';
+import { recurrenceKey } from '@/lib/domain/recurrence';
 import { dueDateFor, isTerminal, targetEscalationLevel } from '@/lib/domain/deadlines';
 
 type Client = PrismaClient | Prisma.TransactionClient;
@@ -50,18 +50,7 @@ export async function nextInspectionReference(organizationId: string, client: Cl
 // Recurrence
 // ---------------------------------------------------------------------------
 
-/**
- * Stable identity for "the same problem at the same branch": branch + the
- * normalised checklist item text. Template edits that only change punctuation or
- * casing therefore do not reset a branch's repeat history.
- */
-export function recurrenceKey(branchId: string, itemText: string) {
-  const normalised = itemText
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
-  return `${branchId}:${createHash('sha1').update(normalised).digest('hex').slice(0, 16)}`;
-}
+export { recurrenceKey };
 
 /**
  * Counts prior findings sharing this recurrence key inside the lookback window.

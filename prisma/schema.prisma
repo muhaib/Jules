@@ -159,7 +159,7 @@ model OrganizationSettings {
 
   // Findings flagged as recurring when the same checklist item fails at the same
   // branch this many times (including the new one) inside the lookback window.
-  recurrenceThreshold  Int @default(2)
+  recurrenceThreshold  Int @default(3)
   recurrenceWindowDays Int @default(365)
 
   // A finding is "due soon" this many hours before its deadline.

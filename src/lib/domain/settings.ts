@@ -54,7 +54,7 @@ export async function orgConfig(organizationId: string): Promise<OrgConfig> {
     bandExcellent: settings?.bandExcellent ?? DEFAULT_SCORING.bandExcellent,
     bandGood: settings?.bandGood ?? DEFAULT_SCORING.bandGood,
     bandNeedsWork: settings?.bandNeedsWork ?? DEFAULT_SCORING.bandNeedsWork,
-    recurrenceThreshold: settings?.recurrenceThreshold ?? 2,
+    recurrenceThreshold: settings?.recurrenceThreshold ?? 3,
     recurrenceWindowDays: settings?.recurrenceWindowDays ?? 365,
     dueSoonHours: settings?.dueSoonHours ?? 48,
     requirePhotoOnNonCompliance: settings?.requirePhotoOnNonCompliance ?? true,
