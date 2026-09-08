@@ -121,6 +121,62 @@ export function pvCapacityForPower(targetAcKW, efficiency) {
   return targetAcKW / efficiency;
 }
 
+/** Representative day-of-year for each month (Klein's recommended values). */
+export const REPRESENTATIVE_DAYS = [17, 47, 75, 105, 135, 162, 198, 228, 258, 288, 318, 344];
+
+/** Solar constant, W/m². */
+export const SOLAR_CONSTANT_W_M2 = 1367;
+
+/**
+ * Monthly shape of the solar resource from orbital geometry alone.
+ *
+ * Extraterrestrial daily irradiation on a horizontal surface (Duffie &
+ * Beckman):
+ *
+ *   H0 = (24/pi) x Gsc x [1 + 0.033 cos(360n/365)]
+ *        x [cos(phi) cos(delta) sin(ws) + (pi ws / 180) sin(phi) sin(delta)]
+ *
+ * with declination delta = 23.45 sin(360 (284 + n) / 365) and sunset hour angle
+ * ws = arccos(-tan(phi) tan(delta)).
+ *
+ * This is astronomy, not weather: it captures day length and sun height through
+ * the year, and captures NOTHING about monsoon cloud, dust or haze. It is
+ * returned normalised so the twelve values average 1.0, giving a seasonal shape
+ * that can scale an annual-average figure.
+ *
+ * @param {number} latitudeDeg
+ * @returns {number[]} Twelve factors averaging 1.0.
+ */
+export function monthlyGeometryFactors(latitudeDeg) {
+  const phi = (latitudeDeg * Math.PI) / 180;
+  const h0 = REPRESENTATIVE_DAYS.map((n) => {
+    const deltaDeg = 23.45 * Math.sin((2 * Math.PI * (284 + n)) / 365);
+    const delta = (deltaDeg * Math.PI) / 180;
+    // Clamp for polar cases; irrelevant in Pakistan but keeps the maths safe.
+    const cosWs = Math.min(1, Math.max(-1, -Math.tan(phi) * Math.tan(delta)));
+    const ws = Math.acos(cosWs);
+    const eccentricity = 1 + 0.033 * Math.cos((2 * Math.PI * n) / 365);
+    return (24 / Math.PI) * SOLAR_CONSTANT_W_M2 * eccentricity
+      * (Math.cos(phi) * Math.cos(delta) * Math.sin(ws)
+        + ws * Math.sin(phi) * Math.sin(delta));
+  });
+  const mean = h0.reduce((a, b) => a + b, 0) / h0.length;
+  return h0.map((v) => v / mean);
+}
+
+/**
+ * Monthly generation estimate: the annual-average daily figure reshaped by the
+ * geometry factors above.
+ * @param {number} dailyGenerationKWh Annual-average daily generation.
+ * @param {number} latitudeDeg
+ * @returns {number[]} Twelve monthly totals, kWh.
+ */
+export function monthlyGenerationProfile(dailyGenerationKWh, latitudeDeg) {
+  const daysInMonth = [31, 28.25, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return monthlyGeometryFactors(latitudeDeg)
+    .map((f, i) => dailyGenerationKWh * f * daysInMonth[i]);
+}
+
 /**
  * @param {SolarInput} input
  * @returns {SolarResult}
