@@ -14,7 +14,9 @@
     "db:deploy": "prisma migrate deploy",
     "db:push": "prisma db push",
     "db:seed": "tsx --conditions=react-server prisma/seed.ts",
-    "db:reset": "prisma migrate reset --force"
+    "db:reset": "prisma migrate reset --force",
+    "seed:second-tenant": "tsx --conditions=react-server scripts/seed-second-tenant.ts",
+    "verify:isolation": "node scripts/verify-isolation.mjs"
   },
   "prisma": {
     "seed": "tsx --conditions=react-server prisma/seed.ts"

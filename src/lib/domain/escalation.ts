@@ -86,7 +86,15 @@ export async function runEscalationSweep(organizationId: string, now = new Date(
     if (isOverdue || isDueSoon) {
       const type = isOverdue ? 'FINDING_OVERDUE' : 'FINDING_DUE_SOON';
       const already = await prisma.notification.count({
-        where: { entityType: 'Finding', entityId: finding.id, type },
+        // Scoped by organization as well as entity: this is a dedupe check, but
+        // no query in the product reaches across a tenant boundary, even one
+        // whose inputs already came from inside it.
+        where: {
+          organizationId,
+          entityType: 'Finding',
+          entityId: finding.id,
+          type,
+        },
       });
       if (already === 0) {
         const audience = [
