@@ -7,6 +7,7 @@ import { findingScope, requirePage } from '@/lib/auth/guard';
 import { filterOptions } from '@/lib/analytics';
 import { orgConfig } from '@/lib/domain/settings';
 import { deadlineState, describeRemaining } from '@/lib/domain/deadlines';
+import { seriesTotals } from '@/lib/domain/recurrence-stats';
 import { fmtDate } from '@/lib/format';
 import { date, endOfDay, findingStatus, num, severity, str, type SearchParams } from '@/lib/filters';
 import { Card, EmptyState, PageHeader, TableWrap } from '@/components/ui/shell';
@@ -84,6 +85,9 @@ export default async function FindingsPage({
     }),
     filterOptions(user),
   ]);
+
+  // One grouped query resolves the true series size for the rows on this page.
+  const totals = await seriesTotals(user.organizationId, findings.map((f) => f.recurrenceKey));
 
   const carried: Record<string, string | undefined> = {
     status: statusParam,
@@ -197,7 +201,9 @@ export default async function FindingsPage({
                         {f.number}
                       </Link>
                       <div className="mt-1 flex flex-wrap gap-1">
-                        {f.isRecurring && <RecurringBadge count={f.recurrenceCount} />}
+                        {f.isRecurring && (
+                          <RecurringBadge count={totals.get(f.recurrenceKey) ?? f.recurrenceCount} />
+                        )}
                         {f._count.evidence > 0 && (
                           <span className="text-2xs text-muted">{f._count.evidence} photo(s)</span>
                         )}

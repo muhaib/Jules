@@ -98,6 +98,15 @@ export default async function FindingPage({ params }: { params: Promise<{ id: st
   const state = deadlineState(finding, cfg.dueSoonHours);
   const stepIndex = LIFECYCLE_STEPS.indexOf(finding.status);
 
+  // The stored recurrenceCount is this finding's position in the series when it
+  // was raised; the series may have grown since. Count it as it stands now.
+  const occurrences = history.length + 1;
+
+  // For a closed finding, whether the deadline was actually met is the useful
+  // fact — repeating "Closed" next to the status badge is not.
+  const closedOnTime =
+    finding.closedAt !== null ? finding.closedAt.getTime() <= finding.dueDate.getTime() : null;
+
   const permissions = {
     assign: can(user, 'finding:assign'),
     respond:
@@ -119,7 +128,13 @@ export default async function FindingPage({ params }: { params: Promise<{ id: st
           <>
             <SeverityBadge severity={finding.severity} />
             <FindingStatusBadge status={finding.status} />
-            <DeadlineBadge state={state} detail={describeRemaining(finding.dueDate, finding.status)} />
+            {closedOnTime === null ? (
+              <DeadlineBadge state={state} detail={describeRemaining(finding.dueDate, finding.status)} />
+            ) : (
+              <Badge tone={closedOnTime ? 'ok' : 'bad'} dot>
+                {closedOnTime ? 'Closed within deadline' : 'Closed after deadline'}
+              </Badge>
+            )}
           </>
         }
       />
@@ -127,11 +142,11 @@ export default async function FindingPage({ params }: { params: Promise<{ id: st
       {finding.isRecurring && (
         <div className="mb-5 rounded-lg border border-crit/25 bg-crit/5 px-4 py-3">
           <div className="flex flex-wrap items-center gap-2">
-            <RecurringBadge count={finding.recurrenceCount} />
+            <RecurringBadge count={occurrences} />
             <p className="text-sm font-medium text-crit">Management attention required</p>
           </div>
           <p className="mt-1.5 text-sm text-ink">
-            &ldquo;{finding.itemText}&rdquo; has failed {finding.recurrenceCount} times at{' '}
+            &ldquo;{finding.itemText}&rdquo; has failed {occurrences} times at{' '}
             {finding.branch.name}. A repeat failure is a systemic problem, not a one-time defect —
             closing this occurrence without addressing the cause will not stop the next one.
           </p>

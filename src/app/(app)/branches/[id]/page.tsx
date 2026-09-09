@@ -7,6 +7,7 @@ import { can, loadBranchOr404, requirePage } from '@/lib/auth/guard';
 import { orgConfig } from '@/lib/domain/settings';
 import { deadlineState, describeRemaining } from '@/lib/domain/deadlines';
 import { bandFor, BAND_LABELS } from '@/lib/domain/scoring';
+import { seriesTotals } from '@/lib/domain/recurrence-stats';
 import { fmtDate, fmtMonth, fmtPct } from '@/lib/format';
 import { Card, EmptyState, Field, PageHeader, Stat, TableWrap } from '@/components/ui/shell';
 import {
@@ -86,6 +87,11 @@ export default async function BranchPage({ params }: { params: Promise<{ id: str
   });
   const criticalByInspection = new Map(
     criticalPerInspection.map((c) => [c.inspectionId as string, c._count]),
+  );
+
+  const recurrenceTotals = await seriesTotals(
+    user.organizationId,
+    findings.map((f) => f.recurrenceKey),
   );
 
   const latest = inspections[0];
@@ -224,7 +230,9 @@ export default async function BranchPage({ params }: { params: Promise<{ id: str
                     </Link>
                     {f.isRecurring && (
                       <div className="mt-1">
-                        <RecurringBadge count={f.recurrenceCount} />
+                        <RecurringBadge
+                          count={recurrenceTotals.get(f.recurrenceKey) ?? f.recurrenceCount}
+                        />
                       </div>
                     )}
                   </td>

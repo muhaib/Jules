@@ -5,6 +5,7 @@ import { prisma } from '@/lib/db';
 import { findingScope, requirePage } from '@/lib/auth/guard';
 import { orgConfig } from '@/lib/domain/settings';
 import { deadlineState, describeRemaining } from '@/lib/domain/deadlines';
+import { seriesTotals } from '@/lib/domain/recurrence-stats';
 import { fmtDateTime, relativeTime } from '@/lib/format';
 import { Card, EmptyState, PageHeader, Stat, TableWrap } from '@/components/ui/shell';
 import { Badge, DeadlineBadge, RecurringBadge, SeverityBadge } from '@/components/ui/badges';
@@ -41,6 +42,7 @@ export default async function VerificationPage() {
     prisma.finding.count({ where: { ...scope, closedById: user.id } }),
   ]);
 
+  const totals = await seriesTotals(user.organizationId, pending.map((f) => f.recurrenceKey));
   const oldest = pending[0]?.evidenceSubmittedAt ?? null;
 
   return (
@@ -100,7 +102,9 @@ export default async function VerificationPage() {
                         {f.number}
                       </Link>
                       <div className="mt-1 flex flex-wrap gap-1">
-                        {f.isRecurring && <RecurringBadge count={f.recurrenceCount} />}
+                        {f.isRecurring && (
+                          <RecurringBadge count={totals.get(f.recurrenceKey) ?? f.recurrenceCount} />
+                        )}
                         {f.rejectionCount > 0 && (
                           <Badge tone="warn">Rework ×{f.rejectionCount}</Badge>
                         )}
