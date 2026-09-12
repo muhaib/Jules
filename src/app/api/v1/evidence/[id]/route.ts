@@ -1,7 +1,7 @@
 import { prisma } from '@/lib/db';
 import { ok, route } from '@/lib/api';
 import { badRequest, forbidden, notFound, requireApi, visibleBranchIds } from '@/lib/auth/guard';
-import { storage } from '@/lib/storage';
+import { storage, StorageObjectNotFound } from '@/lib/storage';
 import { audit } from '@/lib/audit';
 import { requestMeta } from '@/lib/auth/session';
 
@@ -32,7 +32,17 @@ export const GET = route(async (_req, ctx: Ctx) => {
     throw forbidden('This evidence belongs to a branch outside your scope');
   }
 
-  const body = await storage().get(evidence.storageKey);
+  let body: Buffer;
+  try {
+    body = await storage().get(evidence.storageKey);
+  } catch (e) {
+    // The row exists but its object does not — a data-integrity problem, not a
+    // server fault, so answer 404 rather than paging someone with a 500.
+    if (e instanceof StorageObjectNotFound) {
+      throw notFound('This evidence file is no longer available in storage');
+    }
+    throw e;
+  }
 
   return new Response(new Uint8Array(body), {
     headers: {

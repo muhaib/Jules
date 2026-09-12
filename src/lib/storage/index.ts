@@ -12,6 +12,18 @@ export type StoredObject = {
   checksum: string;
 };
 
+/**
+ * Raised when an object referenced by a database row is not in the store.
+ * Distinguished from a genuine failure so callers can answer 404 rather than
+ * 500 — a missing file is a data-integrity problem, not a broken server.
+ */
+export class StorageObjectNotFound extends Error {
+  constructor(readonly key: string) {
+    super(`No stored object for key "${key}"`);
+    this.name = 'StorageObjectNotFound';
+  }
+}
+
 export interface StorageDriver {
   put(key: string, body: Buffer, contentType: string): Promise<void>;
   get(key: string): Promise<Buffer>;
@@ -44,7 +56,12 @@ class LocalDriver implements StorageDriver {
   }
 
   async get(key: string) {
-    return fs.readFile(this.resolve(key));
+    try {
+      return await fs.readFile(this.resolve(key));
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') throw new StorageObjectNotFound(key);
+      throw e;
+    }
   }
 
   async delete(key: string) {
@@ -139,7 +156,14 @@ class S3Driver implements StorageDriver {
 
   async get(key: string) {
     const { mod, s3 } = await this.client();
-    const res = await s3.send(new mod.GetObjectCommand({ Bucket: this.bucket, Key: key }));
+    let res;
+    try {
+      res = await s3.send(new mod.GetObjectCommand({ Bucket: this.bucket, Key: key }));
+    } catch (e) {
+      const name = (e as { name?: string }).name;
+      if (name === 'NoSuchKey' || name === 'NotFound') throw new StorageObjectNotFound(key);
+      throw e;
+    }
     const chunks: Buffer[] = [];
     for await (const chunk of res.Body as AsyncIterable<Uint8Array>) chunks.push(Buffer.from(chunk));
     return Buffer.concat(chunks);
