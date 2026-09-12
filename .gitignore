@@ -10,8 +10,11 @@ next-env.d.ts
 .env.local
 .env*.local
 
-storage/
-!storage/.gitkeep
+# Leading slash anchors this to the repo root. Unanchored, "storage/" also
+# matches src/lib/storage/, which silently excluded the storage driver module
+# from the repository.
+/storage/
+!/storage/.gitkeep
 
 .DS_Store
 *.log
