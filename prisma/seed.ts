@@ -21,7 +21,7 @@ import { PERMISSIONS, ROLE_PERMISSIONS } from '../src/lib/auth/permissions';
 import { computeScore, DEFAULT_SCORING } from '../src/lib/domain/scoring';
 import { DEFAULT_SEVERITY_COLORS, DEFAULT_SEVERITY_HOURS } from '../src/lib/domain/deadlines';
 import { buildRecommendation } from '../src/lib/domain/recommendation';
-import { storeEvidence } from '../src/lib/storage';
+import { storage, storeEvidence } from '../src/lib/storage';
 import { makeRng } from './seed/rng';
 import { ATM_TEMPLATE, BANK_BRANCH_TEMPLATE, type SeedCategory } from './seed/template';
 import {
@@ -209,6 +209,12 @@ async function resetOrganization() {
     await prisma.cluster.deleteMany({ where: { organizationId } });
     await prisma.region.deleteMany({ where: { organizationId } });
     await prisma.organization.delete({ where: { id: organizationId } });
+
+    // Evidence files live in object storage, not the database, so deleting rows
+    // alone leaks every stored photo. Re-running this seed used to orphan ~2,000
+    // files (1.4 GB) per run because each run creates a new organization id.
+    const purged = await storage().deletePrefix(`orgs/${organizationId}`);
+    if (purged > 0) console.log(`  purged ${purged} stored evidence file(s)`);
   }
   await prisma.rolePermission.deleteMany({});
   await prisma.permission.deleteMany({});
