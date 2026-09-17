@@ -7,7 +7,7 @@ import { DEFAULT_CATEGORIES, mergeCategories, resolveKind } from './engine/categ
 import { detectCurrency } from './engine/currency.js';
 import { monthlyIncomeFor, recurringMonthlyIncome, incomeBreakdown, makeIncomeSource } from './engine/income.js';
 import { getRule, BUILTIN_RULES } from './engine/rules.js';
-import { computeBudgetSnapshot, previewExpenseImpact, analyzePurchase } from './engine/budget.js';
+import { computeBudgetSnapshot, previewExpenseImpact, analyzePurchase, aggregateSnapshots } from './engine/budget.js';
 import { buildAlerts } from './engine/alerts.js';
 import { calculateTarget, calculateProgress } from './engine/emergencyFund.js';
 import { goalProgress, totalMonthlyGoalContributions } from './engine/goals.js';
@@ -420,6 +420,19 @@ class SmartBudgetStore {
 
   getAlerts(monthKeyStr = monthKeyOf()) {
     return buildAlerts(this.getSnapshot(monthKeyStr), this.state.profile.currency);
+  }
+
+  /**
+   * A budget-vs-actual snapshot spanning several months: each month's own
+   * income-derived budget is summed against that month's actual spend, so
+   * a 3-month range compares 3 months of budget to 3 months of spending
+   * rather than one month's limit to three months of expenses.
+   */
+  getSnapshotForRange(monthKeys) {
+    const snapshot = aggregateSnapshots(monthKeys.map((mk) => this.getSnapshot(mk)), this.rule);
+    const expenses = monthKeys.flatMap((mk) => this.expensesForMonth(mk));
+    snapshot.categoryTotals = categoryTotalsList(expenses);
+    return snapshot;
   }
 
   // ---------- Emergency fund ----------

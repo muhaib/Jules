@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getRule } from '../src/engine/rules.js';
-import { calculateAllocations, computeBudgetSnapshot, previewExpenseImpact, statusForPercentUsed } from '../src/engine/budget.js';
+import { calculateAllocations, computeBudgetSnapshot, previewExpenseImpact, statusForPercentUsed, aggregateSnapshots } from '../src/engine/budget.js';
 
 const rule502030 = getRule('50-30-20');
 
@@ -92,4 +92,45 @@ test('additional income is included in totalIncome and reallocated across groups
   assert.equal(snapshot.totalIncome, 100000);
   const needs = snapshot.groups.find((g) => g.id === 'needs');
   assert.equal(needs.allocated, 50000);
+});
+
+test('aggregateSnapshots sums budget and actual per group across months', () => {
+  // Month 1: income 3000 -> needs budget 1500, spent 1000.
+  // Month 2: income 3000 -> needs budget 1500, spent 2000 (over).
+  const jan = computeBudgetSnapshot({ rule: rule502030, income: 3000, config: null, expenses: [{ amount: 1000, categoryKind: 'needs' }] });
+  const feb = computeBudgetSnapshot({ rule: rule502030, income: 3000, config: null, expenses: [{ amount: 2000, categoryKind: 'needs' }] });
+  const combined = aggregateSnapshots([jan, feb], rule502030);
+
+  const needs = combined.groups.find((g) => g.id === 'needs');
+  assert.equal(needs.allocated, 3000); // 2 months of 1500 budget
+  assert.equal(needs.spent, 3000); // 1000 + 2000 actual spend
+  assert.equal(needs.percentUsed, 100);
+  assert.equal(needs.status, 'exceeded');
+  assert.equal(combined.totalIncome, 6000);
+});
+
+test('aggregateSnapshots compares N months of budget to N months of spend, not 1 month to N', () => {
+  // A single month's Wants budget is 900. Spend 800/month for 3 months:
+  // naive raw-spend comparison against 1 month's budget would look wildly
+  // over (2400 vs 900); the correct comparison is 2400 vs 3x900 = 2700.
+  const month = computeBudgetSnapshot({ rule: rule502030, income: 3000, config: null, expenses: [{ amount: 800, categoryKind: 'wants' }] });
+  const combined = aggregateSnapshots([month, month, month], rule502030);
+  const wants = combined.groups.find((g) => g.id === 'wants');
+  assert.equal(wants.allocated, 2700);
+  assert.equal(wants.spent, 2400);
+  assert.equal(wants.status, 'high'); // 2400/2700 = 88.9%, not exceeded
+});
+
+test('aggregateSnapshots handles an empty month list', () => {
+  const combined = aggregateSnapshots([], rule502030);
+  assert.equal(combined.totalIncome, 0);
+  assert.deepEqual(combined.groups, []);
+});
+
+test('aggregateSnapshots preserves unassigned spend across months', () => {
+  const rule8020 = getRule('80-20');
+  const month = computeBudgetSnapshot({ rule: rule8020, income: 3000, config: null, expenses: [{ amount: 200, categoryKind: 'debt' }] });
+  const combined = aggregateSnapshots([month, month], rule8020);
+  assert.equal(combined.unassignedSpent, 400);
+  assert.equal(combined.totalSpent, 400);
 });

@@ -107,6 +107,55 @@ export function barChart(data, { width = 320, height = 160, barColor = '#3b82f6'
   return root;
 }
 
+/**
+ * Two bars per item — budget (muted) beside actual (colored by status) —
+ * for comparing allocated vs spent per budget group at a glance.
+ */
+export function groupedBarChart(items, { width = 320, height = 180, barGap = 5 } = {}) {
+  const max = Math.max(1, ...items.flatMap((i) => [i.budget, i.actual]));
+  const padding = 28;
+  const chartWidth = width - padding * 2;
+  const chartHeight = height - padding * 2;
+  const groupWidth = chartWidth / Math.max(1, items.length);
+  const barWidth = Math.max(2, (groupWidth - barGap * 3) / 2);
+
+  const root = svg('svg', { viewBox: `0 0 ${width} ${height}`, width: '100%', height, role: 'img', 'aria-label': 'Budget vs actual chart' });
+  root.appendChild(svg('line', { x1: padding, y1: height - padding, x2: width - padding, y2: height - padding, stroke: '#e2e8f0' }));
+
+  items.forEach((item, i) => {
+    const groupX = padding + i * groupWidth;
+    const budgetHeight = (item.budget / max) * chartHeight;
+    const actualHeight = (item.actual / max) * chartHeight;
+    const budgetX = groupX + barGap;
+    const actualX = budgetX + barWidth + barGap;
+
+    const budgetRect = svg('rect', { x: budgetX, y: height - padding - budgetHeight, width: barWidth, height: budgetHeight, rx: 3, fill: '#cbd5e1' });
+    const budgetTitle = svg('title', {});
+    budgetTitle.textContent = `${item.label} budget: ${item.budget}`;
+    budgetRect.appendChild(budgetTitle);
+    root.appendChild(budgetRect);
+
+    const actualRect = svg('rect', { x: actualX, y: height - padding - actualHeight, width: barWidth, height: actualHeight, rx: 3, fill: item.color || '#3b82f6' });
+    const actualTitle = svg('title', {});
+    actualTitle.textContent = `${item.label} actual: ${item.actual}`;
+    actualRect.appendChild(actualTitle);
+    root.appendChild(actualRect);
+
+    const label = svg('text', { x: groupX + groupWidth / 2, y: height - padding + 14, 'text-anchor': 'middle', class: 'chart-label' });
+    label.textContent = item.label;
+    root.appendChild(label);
+  });
+
+  return root;
+}
+
+export const STATUS_COLORS = {
+  ok: '#22c55e',
+  approaching: '#eab308',
+  high: '#f97316',
+  exceeded: '#dc2626',
+};
+
 export function legend(data) {
   const wrap = document.createElement('div');
   wrap.className = 'chart-legend';

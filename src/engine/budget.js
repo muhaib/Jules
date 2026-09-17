@@ -122,6 +122,75 @@ export function computeBudgetSnapshot({ rule, income, config, expenses, otherInc
 }
 
 /**
+ * Combine several months' snapshots (see computeBudgetSnapshot) into one
+ * budget-vs-actual picture: each group's allocated and spent amounts are
+ * summed across the months, then status/percentUsed/remaining are
+ * recomputed from those totals. This is what lets Analytics show a real
+ * "budget vs actual" comparison over a multi-month range instead of just
+ * raw spending — a 3-month range compares 3 months of budget against 3
+ * months of spending, not 1 month's limit against 3 months of spend.
+ */
+export function aggregateSnapshots(snapshots, rule) {
+  const thresholds = rule?.alertThresholds || [75, 80, 90, 100];
+  if (!snapshots || snapshots.length === 0) {
+    return { totalIncome: 0, totalSpent: 0, remainingIncome: 0, totalSavingsSpent: 0, savingsRate: 0, unassignedSpent: 0, groups: [] };
+  }
+
+  const groupMeta = new Map();
+  const sums = new Map();
+  let totalIncome = 0;
+  let unassignedSpent = 0;
+
+  for (const snapshot of snapshots) {
+    totalIncome += Number(snapshot.totalIncome) || 0;
+    unassignedSpent += Number(snapshot.unassignedSpent) || 0;
+    for (const g of snapshot.groups) {
+      if (!groupMeta.has(g.id)) {
+        groupMeta.set(g.id, { id: g.id, label: g.label, kind: g.kind });
+        sums.set(g.id, { allocated: 0, spent: 0 });
+      }
+      const sum = sums.get(g.id);
+      sum.allocated += Number(g.allocated) || 0;
+      sum.spent += Number(g.spent) || 0;
+    }
+  }
+
+  const groups = Array.from(groupMeta.values()).map((meta) => {
+    const sum = sums.get(meta.id);
+    const allocated = round2(sum.allocated);
+    const spent = round2(sum.spent);
+    const percentUsed = allocated > 0 ? round2((spent / allocated) * 100) : (spent > 0 ? 100 : 0);
+    const remaining = round2(allocated - spent);
+    return {
+      id: meta.id,
+      label: meta.label,
+      kind: meta.kind,
+      allocated,
+      spent,
+      remaining,
+      percentUsed,
+      status: statusForPercentUsed(percentUsed, thresholds),
+      exceededBy: remaining < 0 ? round2(-remaining) : 0,
+    };
+  });
+
+  const totalSpent = round2(groups.reduce((acc, g) => acc + g.spent, 0) + unassignedSpent);
+  const totalSavingsSpent = round2(groups.filter((g) => g.kind.includes('savings')).reduce((acc, g) => acc + g.spent, 0));
+  const remainingIncome = round2(totalIncome - totalSpent);
+  const savingsRate = totalIncome > 0 ? round2((totalSavingsSpent / totalIncome) * 100) : 0;
+
+  return {
+    totalIncome: round2(totalIncome),
+    totalSpent,
+    remainingIncome,
+    totalSavingsSpent,
+    savingsRate,
+    unassignedSpent: round2(unassignedSpent),
+    groups,
+  };
+}
+
+/**
  * "Can I afford this?" — check a planned purchase against the group it
  * would count against without mutating any state.
  */

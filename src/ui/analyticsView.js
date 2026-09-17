@@ -1,5 +1,5 @@
-import { h, mount, page, progressBar, selectInput, field, textInput, button, emptyState } from './components.js';
-import { donutChart, barChart, legend, colorFor } from './charts.js';
+import { h, mount, page, progressBar, selectInput, field, textInput, button, emptyState, budgetGroupCard } from './components.js';
+import { donutChart, barChart, groupedBarChart, legend, colorFor, STATUS_COLORS } from './charts.js';
 import { formatMoney } from '../engine/currency.js';
 import { store, currentMonthKey } from '../store.js';
 
@@ -56,14 +56,20 @@ export function renderAnalyticsView(root, { navigate }) {
     const monthKeys = rangeToMonthKeys(range, customStart, customEnd);
     const expenses = monthKeys.flatMap((mk) => store.expensesForMonth(mk));
 
-    const byKind = { needs: 0, wants: 0, savings: 0, debt: 0 };
+    // Budget vs actual: each month's own income-derived budget summed
+    // against that month's actual spend, so a multi-month range compares
+    // N months of budget to N months of spending rather than one month's
+    // limit to several months of expenses.
+    const rangeSnapshot = store.getSnapshotForRange(monthKeys);
+    const budgetVsActualItems = rangeSnapshot.groups.map((g) => ({
+      label: g.label, budget: g.allocated, actual: g.spent, color: STATUS_COLORS[g.status],
+    }));
+
     const byCategory = {};
     for (const e of expenses) {
-      byKind[e.categoryKind] = (byKind[e.categoryKind] || 0) + e.amount;
       const key = e.subcategory || e.categoryId;
       byCategory[key] = (byCategory[key] || 0) + e.amount;
     }
-    const kindData = Object.entries(byKind).filter(([, v]) => v > 0).map(([k, v]) => ({ id: k, label: capitalize(k), value: Math.round(v * 100) / 100 }));
     const categoryData = Object.entries(byCategory).map(([k, v], i) => ({ id: k, label: k, value: Math.round(v * 100) / 100, color: colorFor(k, i) }));
 
     const monthlySpendTrend = monthKeys.map((mk) => {
@@ -87,8 +93,13 @@ export function renderAnalyticsView(root, { navigate }) {
       field('Date range', selectInput({ options: RANGE_OPTIONS, value: range, onchange: (v) => { range = v; render(); } })),
       customRangeFields,
 
-      h('div', { class: 'section-title' }, 'Needs vs Wants vs Savings'),
-      kindData.length ? chartCard(donutChart(kindData), legend(kindData)) : emptyState('No expenses in this range.'),
+      h('div', { class: 'section-title' }, 'Budget vs Actual'),
+      rangeSnapshot.totalIncome > 0 || rangeSnapshot.groups.some((g) => g.spent > 0)
+        ? h('div', {}, [
+          chartCard(groupedBarChart(budgetVsActualItems), budgetVsActualLegend()),
+          h('div', { class: 'budget-grid' }, rangeSnapshot.groups.map((g) => budgetGroupCard(g, currency, formatMoney))),
+        ])
+        : emptyState('No income or expenses in this range yet.'),
 
       h('div', { class: 'section-title' }, 'Spending by Category'),
       categoryData.length ? chartCard(donutChart(categoryData), legend(categoryData)) : emptyState('No expenses in this range.'),
@@ -123,6 +134,9 @@ function chartCard(...nodes) {
   return h('div', { class: 'card chart-card' }, nodes);
 }
 
-function capitalize(s) {
-  return s ? s[0].toUpperCase() + s.slice(1) : s;
+function budgetVsActualLegend() {
+  return h('div', { class: 'chart-legend' }, [
+    h('div', { class: 'chart-legend-item' }, [h('span', { class: 'chart-legend-swatch', style: 'background:#cbd5e1' }), 'Budget']),
+    h('div', { class: 'chart-legend-item' }, [h('span', { class: 'chart-legend-swatch', style: 'background:#3b82f6' }), 'Actual']),
+  ]);
 }
