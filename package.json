@@ -1,7 +1,7 @@
 {
-  "name": "powercalc-pakistan",
+  "name": "smartbudget",
   "version": "1.0.0",
-  "description": "Electrical Load & Solar Sizing Calculator for Pakistan — mobile-first engineering web app",
+  "description": "SmartBudget — an intelligent, mobile-first personal budgeting assistant built around pluggable budgeting-rule frameworks (50/30/20, 70/20/10, 80/20, Pay Yourself First, Custom).",
   "type": "module",
   "private": true,
   "scripts": {
@@ -12,6 +12,6 @@
   "engines": {
     "node": ">=20"
   },
-  "keywords": ["electrical", "solar", "pv", "load-calculation", "cable-sizing", "pakistan", "boq"],
+  "keywords": ["budgeting", "personal-finance", "expense-tracker", "50-30-20", "pwa"],
   "license": "MIT"
 }

@@ -1,335 +1,140 @@
-/**
- * Small DOM helpers. No framework — just enough structure to keep the views
- * declarative and to make sure user-supplied text is always set via
- * textContent rather than innerHTML.
- * @module ui/components
- */
+// Tiny DOM helper library — no framework, keeps the zero-dependency
+// convention of this project. `h()` builds elements; everything else is a
+// small set of reusable visual components shared across views.
 
-import { fmt } from '../engine/units.js';
-import { ENGINEERING_DISCLAIMER } from '../engine/constants.js';
-
-/**
- * Create an element.
- * @param {string} tag  Tag name, optionally with `.class` and `#id` suffixes, e.g. 'div.card#main'.
- * @param {Object|null} [props] Attributes, `class`, `style`, `on*` handlers, `dataset`.
- * @param {Array<Node|string|null|undefined|false>|Node|string} [children]
- * @returns {HTMLElement}
- */
-export function el(tag, props = null, children = []) {
-  const [name, ...rest] = tag.split(/(?=[.#])/);
-  const node = document.createElement(name || 'div');
-
-  for (const token of rest) {
-    if (token.startsWith('.')) node.classList.add(token.slice(1));
-    else if (token.startsWith('#')) node.id = token.slice(1);
+export function h(tag, attrs = {}, children = []) {
+  const el = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs || {})) {
+    if (value === null || value === undefined || value === false) continue;
+    if (key === 'class') el.className = value;
+    else if (key === 'html') el.innerHTML = value;
+    else if (key.startsWith('on') && typeof value === 'function') el.addEventListener(key.slice(2).toLowerCase(), value);
+    else if (key === 'value') el.value = value;
+    else if (key === 'checked') el.checked = value;
+    else if (key === 'disabled') el.disabled = value;
+    else el.setAttribute(key, value);
   }
-
-  if (props) {
-    for (const [key, value] of Object.entries(props)) {
-      if (value === null || value === undefined || value === false) continue;
-      if (key === 'class') {
-        for (const c of String(value).split(/\s+/).filter(Boolean)) node.classList.add(c);
-      } else if (key === 'style' && typeof value === 'object') {
-        Object.assign(node.style, value);
-      } else if (key === 'dataset') {
-        Object.assign(node.dataset, value);
-      } else if (key === 'text') {
-        node.textContent = String(value);
-      } else if (key === 'html') {
-        node.innerHTML = String(value);
-      } else if (key.startsWith('on') && typeof value === 'function') {
-        node.addEventListener(key.slice(2).toLowerCase(), value);
-      } else if (key === 'value' || key === 'checked' || key === 'disabled' || key === 'selected') {
-        node[key] = value;
-      } else {
-        node.setAttribute(key, String(value));
-      }
-    }
+  for (const child of Array.isArray(children) ? children : [children]) {
+    appendChild(el, child);
   }
-
-  appendChildren(node, children);
-  return node;
+  return el;
 }
 
-/**
- * @param {Node} node
- * @param {unknown} children
- */
-export function appendChildren(node, children) {
-  const list = Array.isArray(children) ? children : [children];
-  for (const child of list) {
-    if (child === null || child === undefined || child === false || child === '') continue;
-    if (Array.isArray(child)) appendChildren(node, child);
-    else if (child instanceof Node) node.appendChild(child);
-    else node.appendChild(document.createTextNode(String(child)));
+function appendChild(el, child) {
+  if (child === null || child === undefined || child === false) return;
+  if (Array.isArray(child)) {
+    for (const c of child) appendChild(el, c);
+    return;
   }
+  el.appendChild(child instanceof Node ? child : document.createTextNode(String(child)));
 }
 
-/** Remove all children from a node. @param {Node} node */
-export function clear(node) {
-  while (node.firstChild) node.removeChild(node.firstChild);
+export function clear(el) {
+  while (el.firstChild) el.removeChild(el.firstChild);
 }
 
-/**
- * A titled card.
- * @param {{ title?: string, subtitle?: string, actions?: Node|Node[], class?: string }} opts
- * @param {Array<Node|string>} children
- * @returns {HTMLElement}
- */
-export function card(opts = {}, children = []) {
-  const head = (opts.title || opts.actions)
-    ? el('div.card-head', null, [
-      el('div', null, [
-        opts.title ? el('h2.card-title', { text: opts.title }) : null,
-        opts.subtitle ? el('p.card-sub', { text: opts.subtitle }) : null,
-      ]),
-      opts.actions ? el('div.card-actions', null, opts.actions) : null,
-    ])
-    : null;
-  return el('section.card', { class: opts.class }, [head, el('div.card-body', null, children)]);
+export function mount(container, node) {
+  clear(container);
+  container.appendChild(node);
 }
 
-/**
- * A labelled form field.
- * @param {{ label: string, hint?: string, error?: string, warning?: string, wide?: boolean }} opts
- * @param {Node} control
- * @returns {HTMLElement}
- */
-export function field(opts, control) {
-  return el('label.field', { class: opts.wide ? 'field-wide' : null }, [
-    el('span.field-label', { text: opts.label }),
-    control,
-    opts.hint ? el('span.field-hint', { text: opts.hint }) : null,
-    opts.error ? el('span.field-msg.is-error', { text: opts.error }) : null,
-    opts.warning && !opts.error ? el('span.field-msg.is-warning', { text: opts.warning }) : null,
+// ---------- Status ----------
+
+export const STATUS_META = {
+  ok: { icon: '🟢', label: 'Within Budget', className: 'status-ok' },
+  approaching: { icon: '🟡', label: 'Approaching Limit', className: 'status-approaching' },
+  high: { icon: '🟠', label: 'High Usage', className: 'status-high' },
+  exceeded: { icon: '🔴', label: 'Over Budget', className: 'status-exceeded' },
+};
+
+export function statusPill(status) {
+  const meta = STATUS_META[status] || STATUS_META.ok;
+  return h('span', { class: `pill ${meta.className}` }, `${meta.icon} ${meta.label}`);
+}
+
+// ---------- Progress bar ----------
+
+export function progressBar(percentUsed, status) {
+  const meta = STATUS_META[status] || STATUS_META.ok;
+  const width = Math.min(100, Math.max(0, percentUsed));
+  return h('div', { class: 'progress-track' }, [
+    h('div', { class: `progress-fill ${meta.className}`, style: `width:${width}%` }),
   ]);
 }
 
-/**
- * A number input wired to an onChange callback.
- * @param {{ value: unknown, onInput: (v: string) => void, step?: string|number, min?: number, max?: number, placeholder?: string, invalid?: boolean, suffix?: string, disabled?: boolean }} opts
- * @returns {HTMLElement}
- */
-export function numberInput(opts) {
-  const input = el('input.input', {
-    type: 'number',
-    inputmode: 'decimal',
-    value: opts.value ?? '',
-    step: opts.step ?? 'any',
-    min: opts.min,
-    max: opts.max,
-    placeholder: opts.placeholder,
-    disabled: opts.disabled,
-    class: opts.invalid ? 'is-invalid' : null,
-    onInput: (e) => opts.onInput(e.target.value),
-  });
-  if (!opts.suffix) return input;
-  return el('span.input-group', null, [input, el('span.input-suffix', { text: opts.suffix })]);
-}
+// ---------- Card / group budget row ----------
 
-/**
- * @param {{ value: unknown, onInput: (v: string) => void, placeholder?: string, invalid?: boolean, disabled?: boolean }} opts
- * @returns {HTMLElement}
- */
-export const textInput = (opts) => el('input.input', {
-  type: 'text',
-  value: opts.value ?? '',
-  placeholder: opts.placeholder,
-  disabled: opts.disabled,
-  class: opts.invalid ? 'is-invalid' : null,
-  onInput: (e) => opts.onInput(e.target.value),
-});
-
-/**
- * @param {{ value: unknown, options: Array<{value: string|number, label: string}>, onChange: (v: string) => void, disabled?: boolean }} opts
- * @returns {HTMLElement}
- */
-export const select = (opts) => el('select.input.select', {
-  disabled: opts.disabled,
-  onChange: (e) => opts.onChange(e.target.value),
-}, opts.options.map((o) => el('option', {
-  value: o.value,
-  selected: String(o.value) === String(opts.value),
-  text: o.label,
-})));
-
-/**
- * A segmented control — used for phase, sizing mode and similar binary choices.
- * @param {{ value: unknown, options: Array<{value: string|number, label: string}>, onChange: (v: string) => void }} opts
- * @returns {HTMLElement}
- */
-export const segmented = (opts) => el('div.segmented', { role: 'group' },
-  opts.options.map((o) => el('button.segment', {
-    type: 'button',
-    class: String(o.value) === String(opts.value) ? 'is-active' : null,
-    'aria-pressed': String(String(o.value) === String(opts.value)),
-    text: o.label,
-    onClick: () => opts.onChange(String(o.value)),
-  })));
-
-/**
- * A large result tile.
- * @param {{ label: string, value: string, unit?: string, note?: string, tone?: 'default'|'accent'|'muted' }} opts
- * @returns {HTMLElement}
- */
-export const stat = (opts) => el('div.stat', { class: opts.tone ? `stat-${opts.tone}` : null }, [
-  el('div.stat-label', { text: opts.label }),
-  el('div.stat-value', null, [
-    opts.value,
-    opts.unit ? el('span.stat-unit', { text: opts.unit }) : null,
-  ]),
-  opts.note ? el('div.stat-note', { text: opts.note }) : null,
-]);
-
-/**
- * A compact label/value row.
- * @param {string} label
- * @param {string|Node} value
- * @param {string} [unit]
- * @returns {HTMLElement}
- */
-export const kv = (label, value, unit) => el('div.kv-row', null, [
-  el('span.kv-label', { text: label }),
-  el('span.kv-value', null, [value, unit ? el('span.kv-unit', { text: unit }) : null]),
-]);
-
-/**
- * A data table with a horizontally scrollable wrapper, so wide engineering
- * tables never force the page itself to scroll sideways.
- * @param {{ headers: Array<string|{label:string, align?:string}>, rows: Array<Array<Node|string|number>>, empty?: string, class?: string }} opts
- * @returns {HTMLElement}
- */
-export function table(opts) {
-  const head = el('thead', null, el('tr', null, opts.headers.map((h) => {
-    const spec = typeof h === 'string' ? { label: h } : h;
-    return el('th', { class: spec.align === 'right' ? 'num' : null, text: spec.label });
-  })));
-
-  const body = opts.rows.length
-    ? el('tbody', null, opts.rows.map((r) => el('tr', null, r.map((cell) => (
-      cell instanceof HTMLTableCellElement ? cell : el('td', null, cell)
-    )))))
-    : el('tbody', null, el('tr', null, el('td', {
-      colspan: String(opts.headers.length),
-      class: 'empty-cell',
-      text: opts.empty ?? 'Nothing to show yet.',
-    })));
-
-  return el('div.table-wrap', null, el('table.table', { class: opts.class }, [head, body]));
-}
-
-/** A right-aligned numeric table cell. @param {string|Node} content @returns {HTMLElement} */
-export const numCell = (content) => el('td.num', null, content);
-
-/**
- * @param {{ label: string, onClick: () => void, variant?: 'primary'|'ghost'|'danger'|'subtle', small?: boolean, disabled?: boolean, title?: string }} opts
- * @returns {HTMLElement}
- */
-export const button = (opts) => el('button.btn', {
-  type: 'button',
-  class: [opts.variant ? `btn-${opts.variant}` : '', opts.small ? 'btn-sm' : ''].filter(Boolean).join(' ') || null,
-  disabled: opts.disabled,
-  title: opts.title,
-  text: opts.label,
-  onClick: opts.onClick,
-});
-
-/**
- * Render validation issues as a list. Errors first.
- * @param {import('../engine/validation.js').Issue[]} issues
- * @returns {HTMLElement|null}
- */
-export function issueList(issues) {
-  if (!issues || issues.length === 0) return null;
-  const errors = issues.filter((i) => i.level === 'error');
-  const warnings = issues.filter((i) => i.level === 'warning');
-  return el('div.issues', null, [
-    errors.length
-      ? el('div.issue-block.is-error', null, [
-        el('div.issue-title', { text: errors.length === 1 ? '1 input needs fixing' : `${errors.length} inputs need fixing` }),
-        el('ul', null, errors.map((i) => el('li', { text: i.message }))),
-      ])
-      : null,
-    warnings.length
-      ? el('div.issue-block.is-warning', null, [
-        el('div.issue-title', { text: 'Worth checking' }),
-        el('ul', null, warnings.map((i) => el('li', { text: i.message }))),
-      ])
-      : null,
-  ]);
-}
-
-/**
- * The disclaimer that must appear on every calculation page.
- * @returns {HTMLElement}
- */
-export const disclaimer = () => el('p.disclaimer', null, [
-  el('strong', { text: 'Preliminary estimate. ' }),
-  ENGINEERING_DISCLAIMER,
-]);
-
-/**
- * A collapsible block of assumptions or caveats.
- * @param {string} title
- * @param {string[]} items
- * @param {{ open?: boolean, tone?: 'note'|'warn' }} [opts]
- * @returns {HTMLElement|null}
- */
-export function detailsList(title, items, opts = {}) {
-  if (!items || items.length === 0) return null;
-  return el('details.assumptions', { open: opts.open ? '' : null, class: opts.tone === 'warn' ? 'is-warn' : null }, [
-    el('summary', null, [
-      el('span.assumptions-title', { text: title }),
-      el('span.assumptions-count', { text: String(items.length) }),
+export function budgetGroupCard(group, currency, formatMoney) {
+  return h('div', { class: 'card budget-card' }, [
+    h('div', { class: 'budget-card-head' }, [
+      h('span', { class: 'budget-card-label' }, group.label),
+      statusPill(group.status),
     ]),
-    el('ul', null, items.map((a) => el('li', { text: a }))),
+    h('div', { class: 'budget-card-amounts' }, [
+      h('span', { class: 'amount-spent' }, formatMoney(group.spent, currency)),
+      h('span', { class: 'amount-sep' }, ' / '),
+      h('span', { class: 'amount-allocated' }, formatMoney(group.allocated, currency)),
+    ]),
+    progressBar(group.percentUsed, group.status),
+    h('div', { class: 'budget-card-foot' }, [
+      h('span', {}, `${Math.round(group.percentUsed)}% Used`),
+      group.status === 'exceeded'
+        ? h('span', { class: 'text-danger' }, `Exceeded by ${formatMoney(group.exceededBy, currency)}`)
+        : h('span', { class: 'text-muted' }, `${formatMoney(group.remaining, currency)} remaining`),
+    ]),
   ]);
 }
 
-/**
- * A horizontal bar chart, drawn as inline SVG so it prints and needs no library.
- * @param {{ label: string, value: number, tone?: string }[]} series
- * @param {{ unit?: string, decimals?: number, height?: number }} [opts]
- * @returns {HTMLElement}
- */
-export function barChart(series, opts = {}) {
-  const rows = series.filter((s) => Number.isFinite(s.value));
-  if (rows.length === 0) return el('p.muted', { text: 'No data to plot yet.' });
+// ---------- Buttons ----------
 
-  const max = Math.max(...rows.map((s) => Math.abs(s.value)), 1e-9);
-  return el('div.chart', null, rows.map((s) => {
-    const pct = Math.max(0, (s.value / max) * 100);
-    return el('div.chart-row', null, [
-      el('div.chart-label', { text: s.label }),
-      el('div.chart-track', null,
-        el('div.chart-bar', {
-          class: s.tone ? `tone-${s.tone}` : null,
-          style: { width: `${pct.toFixed(2)}%` },
-        })),
-      el('div.chart-value', {
-        text: `${fmt(s.value, opts.decimals ?? 1)}${opts.unit ? ` ${opts.unit}` : ''}`,
-      }),
-    ]);
-  }));
+export function button(label, { variant = 'primary', onClick, type = 'button', className = '' } = {}) {
+  return h('button', { type, class: `btn btn-${variant} ${className}`, onclick: onClick }, label);
 }
 
-/**
- * A stacked monthly generation profile, drawn as an inline SVG column chart.
- * @param {number[]} values Twelve monthly values.
- * @param {{ unit?: string }} [opts]
- * @returns {HTMLElement}
- */
-export function monthChart(values, opts = {}) {
-  const months = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
-  const max = Math.max(...values, 1e-9);
-  return el('div.month-chart', null, values.map((v, i) => el('div.month-col', {
-    title: `${months[i]}: ${fmt(v, 0)}${opts.unit ? ` ${opts.unit}` : ''}`,
-  }, [
-    el('div.month-bar-track', null,
-      el('div.month-bar', { style: { height: `${((v / max) * 100).toFixed(1)}%` } })),
-    el('div.month-label', { text: months[i] }),
-  ])));
+// ---------- Form field ----------
+
+export function field(labelText, inputEl, errorText) {
+  return h('label', { class: 'field' }, [
+    h('span', { class: 'field-label' }, labelText),
+    inputEl,
+    errorText ? h('span', { class: 'field-error' }, errorText) : null,
+  ]);
 }
 
-/** Format helper re-exported for the views. */
-export { fmt };
+export function textInput({ value = '', type = 'text', placeholder = '', oninput, name, step, min } = {}) {
+  return h('input', { type, value, placeholder, name, step, min, oninput: oninput ? (e) => oninput(e.target.value) : null });
+}
+
+export function selectInput({ options, value, onchange, name } = {}) {
+  const el = h('select', { name, onchange: onchange ? (e) => onchange(e.target.value) : null },
+    options.map((opt) => h('option', { value: opt.value, selected: opt.value === value }, opt.label)));
+  return el;
+}
+
+// ---------- Alert banner ----------
+
+export function alertBanner(alert) {
+  return h('div', { class: `alert-banner alert-${alert.level}` }, [
+    h('span', { class: 'alert-icon' }, alert.icon),
+    h('div', { class: 'alert-text' }, [
+      h('div', {}, alert.message),
+      alert.detail ? h('div', { class: 'alert-detail' }, alert.detail) : null,
+    ]),
+  ]);
+}
+
+// ---------- Page scaffold ----------
+
+export function page(title, contentNodes, { back } = {}) {
+  return h('div', { class: 'page' }, [
+    h('header', { class: 'page-header' }, [
+      back ? h('button', { class: 'back-btn', onclick: back, 'aria-label': 'Back' }, '←') : null,
+      h('h1', {}, title),
+    ]),
+    h('div', { class: 'page-content' }, contentNodes),
+  ]);
+}
+
+export function emptyState(message) {
+  return h('div', { class: 'empty-state' }, message);
+}

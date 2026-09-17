@@ -1,248 +1,142 @@
-# PowerCalc Pakistan
+# SmartBudget
 
-**Electrical Load & Solar Sizing Calculator** — a mobile-first engineering tool for
-electrical engineers, technicians, solar installers and facility teams working in
-Pakistan.
+An intelligent, mobile-first personal budgeting assistant. You enter your
+income once, pick a budgeting framework, and SmartBudget calculates every
+limit for you — then keeps them updated in real time as you log expenses,
+warns you before you go over, tracks an emergency fund and financial goals,
+and generates a monthly report.
 
-It builds a load schedule, sizes cables and protection, sizes a rooftop PV array,
-counts modules, estimates roof area and inverter capacity, and generates an
-editable Bill of Quantities — showing the formula and every assumption behind
-each number.
+It's a real working app, not a static prototype: every number on screen is
+computed from your income, chosen rule and logged expenses — nothing is
+hard-coded.
 
----
-
-## Running it
-
-No build step, no dependencies to install.
+## Quick start
 
 ```bash
-npm start           # http://localhost:5173
+npm start        # serves the app at http://localhost:5173
+npm test          # runs the engine's unit test suite (node --test)
 ```
 
-`npm start` runs a ~50-line static file server (`server.js`) using only Node's
-standard library. Any static host works just as well — GitHub Pages, Netlify, an
-S3 bucket, or a folder served by nginx. The app is plain ES modules, so it needs
-to be served over HTTP; opening `index.html` from the file system directly will
-be blocked by the browser's module CORS rules.
+No build step, no dependencies to install — this is a zero-dependency
+static app (see *Architecture* below).
 
-```bash
-npm test            # 120+ tests via node --test, no install required
-```
+## The core flow
 
-Everything runs in the browser. There is no account, no server component and no
-network call — projects are stored in `localStorage` and nothing leaves the
-device. It works offline once loaded.
-
----
-
-## What it calculates
-
-### Load
-- Connected load, maximum demand, 24-hour running load and daily/monthly energy,
-  kept strictly separate
-- Aggregate power factor as **total kW ÷ total kVA** — not the arithmetic mean of
-  the individual factors, which is the common mistake
-- Line current:
-  - Three phase: `I = P / (√3 × V_LL × PF)`
-  - Single phase: `I = P / (V_LN × PF)`
-- Per-item and whole-installation diversity, plus a spare-capacity allowance
-
-### Cable
-Follows the conventional LV selection sequence, and shows each step:
-
-1. Design current `Ib`
-2. Protective device rating `In ≥ Ib` from the standard range
-3. Required tabulated rating `It ≥ In / (Ca × Cg × Ci)`
-4. Smallest size whose base rating meets `It` — the **thermal** size
-5. Smallest size meeting the voltage-drop limit — the **voltage-drop** size
-6. The **larger of the two** is what is recommended
-
-The cable is sized to carry the *device rating*, not merely the design current,
-so that the protection actually protects the cable.
-
-### Voltage drop
-Computed from conductor physics rather than a mV/A/m lookup, so every term is
-visible and adjustable:
-
-```
-R′ = ρ₂₀ × [1 + α(θ − 20)] / A          X′ = user-set reactance
-
-Single phase:  ΔV = 2  × I × L × (R′·cosφ + X′·sinφ)
-Three phase:   ΔV = √3 × I × L × (R′·cosφ + X′·sinφ)
-```
-
-### Solar
-Two sizing modes, because "how big a system do I need?" has two different
-engineering answers:
-
-- **Mode A — instantaneous daytime load.** Sizes the array to supply a share of
-  the daytime load at *peak irradiance*. Answers "will solar run my site during
-  the day?" It does **not** mean the load is covered all day.
-- **Mode B — daily energy.** Sizes the array so its energy over an average day
-  covers a share of daily consumption. Answers "how much of my monthly units will
-  solar replace?" It says nothing about instantaneous matching.
-
-```
-System efficiency = (1 − DC losses) × inverter efficiency
-Mode A:  kWp = target AC power / system efficiency
-Mode B:  kWp = required energy / (peak sun hours × system efficiency)
-```
-
-### Modules and array area
-- Module count **always rounds up** — a fractional panel does not exist
-- Module dimensions entered in mm, converted to m, ft, m² and sq ft
-- Gross area = module glass area ÷ ground coverage ratio × (1 + access margin)
-- Row pitch `= L·cos β + L·sin β / tan α`, with α defaulting to winter solar noon
-  at the site latitude
-
-### Inverter
-Reports a **range** bounded by the acceptable DC/AC ratio, with a hard floor from
-the site load for hybrid and off-grid systems. It never presents a single rating
-as universally correct.
-
-### BOQ
-17 line items — modules, inverter, mounting, DC/AC cable, isolators, SPDs,
-earthing, MC4 connectors, combiners, DB, tray, labels, installation — with every
-quantity derived from the sizing results. Each line records the rule that
-produced its quantity, so a reviewer can change the driver rather than the
-number. Fully editable; exports to Excel, CSV and PDF.
-
----
+1. **Onboarding** — name (optional), currency (defaults to PKR), monthly
+   salary, salary date, other income, existing savings, essential monthly
+   expenses, existing debt (all but currency/salary optional).
+2. **Choose a budgeting rule** — 50/30/20, 70/20/10, 80/20, Pay Yourself
+   First (percent or fixed amount), or a fully Custom split. The screen
+   shows a live preview of what each rule means in Rupees for your income.
+3. **Add expenses** — amount, category → subcategory, date, payment
+   method, optional note, in a few taps.
+4. **Everything recalculates immediately** — spent, remaining, % used, and
+   whether you're approaching or over a limit, per budget group.
+5. **Alerts fire automatically** at 75% (info), 80% (warning), 90%
+   ("almost finished — only Rs. X remains") and 100%+ ("exceeded by Rs.
+   X"). Before saving an expense that would push a group over budget, you
+   get an "Add Anyway / Cancel" choice — SmartBudget never blocks a
+   transaction, it only informs.
+6. **Emergency fund & goals** track cumulative progress toward a target,
+   with an estimated completion date from your monthly contribution.
+7. **Reports & analytics** — a monthly financial summary (income,
+   expenses, savings, savings rate, exceeded categories, largest spends,
+   month-over-month comparison) plus category/trend charts filterable by
+   month, quarter, half-year, year or a custom range.
 
 ## Architecture
 
-The calculation engine is completely separate from the interface. It has no DOM
-dependency, so it can be exercised and verified without a browser.
+**Rule engine (`src/engine/rules.js` + `src/engine/budget.js`)** — this is
+the piece the spec calls out explicitly: budgeting rules are *data*, never
+hard-coded UI math. A rule is `{ name, groups: [{ id, label, kind[],
+percent }], alertThresholds }`. `kind` says which category kinds (needs /
+wants / savings / debt) count against that group, so `resolveGroups()` +
+`calculateAllocations()` turn any rule + any income into concrete amounts,
+and `computeBudgetSnapshot()` matches expenses to groups by kind. Adding a
+new rule (e.g. a 60/20/20 variant) means appending one object to
+`BUILTIN_RULES` — no other file changes. Pay Yourself First and Custom
+resolve their groups from live user config (percent or fixed savings
+amount; user-defined categories) instead of a fixed table.
+
+**Pure calculation core (`src/engine/*.js`)** — budget math, alert
+thresholds, emergency fund targets, goal progress, recurring-expense
+materialization, insights and monthly-report generation are all pure
+functions with no DOM/storage dependency, covered by 47 unit tests in
+`test/*.test.js` (`npm test`). Several tests reproduce the spec's own
+worked examples verbatim (the Rs. 80,000 / 50-30-20 example, the Wants
+95%→exceeded example, the "Can I afford this?" Rs. 5,000 example, the
+September report with its 29.75% savings rate) to keep the implementation
+honest against the spec, not just internally consistent.
+
+**State store (`src/store.js`)** — the single source of truth: profile,
+rule/config, categories, expenses, recurring items, goals, emergency fund,
+notification settings. All mutations go through store methods (`addExpense`,
+`contributeToGoal`, `setRule`, …); UI modules never touch `localStorage`
+directly.
+
+**UI (`src/ui/*.js`)** — a small hyperscript-style helper (`h()`) builds
+DOM directly; there's no framework and no build step, matching a
+zero-dependency, fast-loading, mobile-first app. A hash router in
+`src/main.js` maps `#/route` to a view module. Charts are hand-rolled
+inline SVG (`src/ui/charts.js`) — a donut for category/group breakdowns, a
+bar chart for monthly trends — again with no chart library dependency.
+
+## Architecture & privacy: why this is a local-first app
+
+The spec's MVP has no bank integration and asks for secure auth, an
+encrypted store, user data isolation, account deletion, data export and
+session management — but stood up against no real backend in this
+environment. Rather than fake a server, SmartBudget is built **local-first
+on purpose**: every screen works with zero network calls, and device data
+never leaves the device, which is the strongest possible interpretation of
+"user data isolation" and "encrypted transmission" (there is no
+transmission).
+
+What that means concretely:
+
+- **Storage**: all data lives in the browser's `localStorage`, wrapped by
+  `src/store.js`.
+- **Optional PIN lock** (Settings → Security): choosing a PIN derives an
+  AES-256-GCM key via PBKDF2 (150,000 iterations, `src/engine/crypto.js`)
+  and encrypts the entire app-state blob at rest; without a PIN, data is
+  simply local and unencrypted (still never transmitted anywhere). Session
+  key lives in memory only, per the usual "unlock once, no work" balance.
+- **Data export / import**: Settings → Your Data → Export downloads a full
+  JSON snapshot; Import restores from one.
+- **Account deletion**: Settings → Delete Account & All Data wipes
+  `localStorage` completely.
+- **Multi-device sync and true server-side accounts are out of scope for
+  this MVP** by design — adding a backend later (real auth, a database,
+  encrypted transport) is a drop-in replacement for `store.js`'s
+  persistence calls; the rule engine, calculation core and UI don't change.
+
+## What's implemented (MVP, spec section 21)
+
+User setup and income · 50/30/20 (+70/20/10, 80/20, Pay Yourself First,
+Custom — all live from day one via the rule engine, not staged later) ·
+Needs/Wants/Savings/Debt categories with custom categories · expense entry
+· real-time budget tracking · 75/80/90/100% alerts · in-app + browser
+push notifications · emergency fund tracker · dashboard · monthly report ·
+category/trend charts · financial goals · recurring expenses ·
+"Can I afford this?" checker · smart insights framed as benchmarks, never
+verdicts ("According to your selected budgeting rule…") · PIN lock,
+encryption at rest, export, and account deletion.
+
+## Project layout
 
 ```
+index.html            entry HTML
+server.js             zero-dependency static file server (npm start)
 src/
-  engine/          Pure functions — plain data in, plain data out
-    units.js         Unit conversion and formatting
-    validation.js    Input checks, returning issues rather than throwing
-    constants.js     Reference tables, each labelled with its own basis
-    load.js          Load schedule, demand, power factor, current
-    voltagedrop.js   Drop from conductor physics
-    cable.js         Full LV selection sequence
-    solar.js         PV sizing (both modes), yield, savings, seasonal shape
-    panels.js        Module count, footprint, gross area, row spacing
-    inverter.js      Capacity range and standard-rating selection
-    boq.js           Bill of quantities from the sizing results
-    index.js         calculateProject() — runs the whole chain in order
-
-  export/          Serialisation, all pure except download.js and print.js
-    zip.js           Minimal STORE-method ZIP writer
-    xlsx.js          Genuine OOXML workbook, no third-party library
-    csv.js           RFC 4180 quoting
-    report.js        Spreadsheet rows and a printable A4 HTML report
-    download.js      Browser download helpers
-    print.js         Hands the report to the browser's print pipeline
-
-  ui/              Views. Each renders from state; none holds its own copy
-  store.js         Projects and settings in localStorage
-  main.js          Hash router and render loop
-
-test/              node --test, no dependencies
+  app.css              mobile-first styling (light + dark mode)
+  main.js              hash router, boot sequence, notification checks
+  store.js             state, persistence, security, all mutations
+  engine/               pure, unit-tested calculation core
+    rules.js              the budgeting-rule engine
+    budget.js             allocation + spend + status calculation
+    alerts.js              75/80/90/100% alert + pre-save warning copy
+    emergencyFund.js, goals.js, recurring.js, insights.js, report.js
+    categories.js, currency.js, crypto.js, validation.js, id.js
+  ui/                   view modules + shared DOM/chart helpers
+test/                 node --test unit tests for the engine
 ```
-
-**Results are never stored.** The store holds inputs only; every figure on screen
-is re-derived by the engine on each render. There is no code path by which a
-stale result can survive an input change.
-
-### Using the engine on its own
-
-```js
-import { calculateProject, createLoadItem } from './src/engine/index.js';
-
-const r = calculateProject({
-  load: {
-    systemVoltage: 400,
-    systemPhases: 3,
-    loads: [createLoadItem({
-      name: 'Branch load', quantity: 1, ratedPower: 43, unit: 'kW',
-      phase: 3, powerFactor: 0.9, diversityFactor: 1, hoursPerDay: 10,
-    })],
-  },
-  solar: { mode: 'instantaneous', cityKey: 'multan', targetPercent: 100 },
-  panels: { panelWattage: 600, panelWidthMm: 2278, panelHeightMm: 1134 },
-  cable: { lengthM: 50 }, inverter: {}, boq: {},
-});
-
-r.load.demandCurrentA;        // 68.97 A
-r.solar.requiredPvKWp;        // 51.55 kWp
-r.panels.panelCount;          // 86
-r.inverter.rangeLabel;        // '40–52 kW'
-r.cable.recommendedSizeMm2;   // 25
-```
-
----
-
-## About the reference data — please read
-
-`src/engine/constants.js` holds the ampacity table, correction factors and peak
-sun hours. These are **indicative values compiled for preliminary estimating**.
-They are shaped after the IEC 60364-5-52 / BS 7671 family of tables and published
-solar resource data, but this project is **not** a standards document and has no
-standards-body status.
-
-Every value a design depends on must be checked against:
-
-- the current edition of the applicable standard;
-- the cable manufacturer's published ratings; and
-- site-measured or site-specific irradiation data (Global Solar Atlas, NASA
-  POWER, Meteonorm) rather than the planning-grade city averages here.
-
-The tables are printed in full under **Settings → Reference data** so you can
-judge whether they fit your project, rather than trusting a black box. Each one
-carries a `_basis` string stating the conditions it applies to.
-
-An ampacity number on its own never means a cable is safe. Every cable result in
-this app ships the list of what it does **not** cover: installation method,
-derating, short-circuit withstand (`k²S² ≥ I²t`), earth-fault loop impedance,
-harmonics, CPC sizing and the manufacturer's own ratings.
-
-Tariff and cost figures are placeholders. Pakistani electricity tariffs are
-slab-based and revised periodically — enter your own rate from your bill.
-
----
-
-## Disclaimer
-
-> Calculations are preliminary engineering estimates. Final equipment and cable
-> selection must be verified against manufacturer datasheets, site conditions,
-> applicable electrical codes, protection coordination requirements, and
-> qualified engineering review.
-
-This notice appears on every calculation page in the app and on every export.
-
----
-
-## Notes on a few implementation choices
-
-**PDF export goes through the browser's print dialog** ("Save as PDF") rather
-than a bundled PDF writer. That keeps the app dependency-free and offline-capable,
-and the browser's renderer gives better typography and pagination than a
-hand-rolled writer would. The trade-off is one extra step for the user.
-
-**Excel export writes a real `.xlsx`.** An OOXML workbook is a ZIP container, so
-`src/export/zip.js` implements a minimal STORE-method (uncompressed) ZIP writer —
-its CRC-32 is verified in the test suite against the standard `0xCBF43926` check
-value, and the generated workbook is validated with `unzip -t`.
-
-**The seasonal generation chart is astronomy, not weather.** It comes from
-extraterrestrial daily irradiation at the site latitude (Duffie & Beckman), which
-captures day length and sun height through the year and captures *nothing* about
-monsoon cloud, dust or haze. It is labelled as such in the app.
-
-**Aluminium conductors start at 16 mm²**, since smaller aluminium sizes are not
-commonly manufactured for these applications.
-
----
-
-## Browser support
-
-Any current browser with ES module support: Chrome/Edge 91+, Firefox 90+,
-Safari 15+. `structuredClone` is used for project duplication.
-
-## Licence
-
-MIT.

@@ -1,500 +1,454 @@
-/**
- * Application state: projects, the active project, and user settings.
- *
- * Everything lives in localStorage, so the app works offline and no data
- * leaves the device. The store is deliberately dumb — it holds INPUTS only.
- * Results are never persisted; they are re-derived from the inputs on every
- * render by the engine, which is what keeps the numbers from going stale.
- *
- * @module store
- */
+// Central application state: persistence, security (optional PIN lock),
+// and all mutating actions. UI modules read derived data through the
+// getters here and call actions to mutate state — nothing touches
+// localStorage directly outside this file.
 
-import { createLoadItem } from './engine/load.js';
-import {
-  PAKISTAN_CITIES, DEFAULT_TARIFF_PKR_PER_KWH, PANEL_DIMENSION_PRESETS,
-} from './engine/constants.js';
+import { DEFAULT_CATEGORIES, mergeCategories, findCategoryKind } from './engine/categories.js';
+import { DEFAULT_CURRENCY } from './engine/currency.js';
+import { getRule, BUILTIN_RULES } from './engine/rules.js';
+import { computeBudgetSnapshot, previewExpenseImpact } from './engine/budget.js';
+import { buildAlerts } from './engine/alerts.js';
+import { calculateTarget, calculateProgress } from './engine/emergencyFund.js';
+import { goalProgress, totalMonthlyGoalContributions } from './engine/goals.js';
+import { materializeForMonth, monthKey as monthKeyOf, upcomingReminders } from './engine/recurring.js';
+import { buildInsights, categoryTotalsList } from './engine/insights.js';
+import { generateMonthlyReport } from './engine/report.js';
+import { generateId } from './engine/id.js';
+import { encryptWithKey, decryptWithKey, deriveKeyFromPin, randomBytes, bytesToBase64 } from './engine/crypto.js';
 
-const STORAGE_KEY = 'powercalc.pakistan.v1';
-const SCHEMA_VERSION = 1;
+const STORAGE_KEY = 'smartbudget:v1:state';
+const LOCK_META_KEY = 'smartbudget:v1:lock';
 
-/** @typedef {'Draft'|'In review'|'Issued'|'Archived'} ProjectStatus */
-
-/** Project statuses, in workflow order. */
-export const PROJECT_STATUSES = /** @type {ProjectStatus[]} */ ([
-  'Draft', 'In review', 'Issued', 'Archived',
-]);
-
-/** Factory for the app-wide defaults a new project inherits. */
-export function defaultSettings() {
+function defaultState() {
   return {
-    defaultCityKey: 'multan',
-    defaultSystemVoltage: 400,
-    defaultSystemPhases: 3,
-    defaultPanelWattage: 600,
-    defaultSystemLossPercent: 14,
-    defaultInverterEfficiency: 0.97,
-    defaultAmbientC: 40,
-    defaultVoltageDropLimitPercent: 3,
-    tariffPkrPerKwh: DEFAULT_TARIFF_PKR_PER_KWH,
-    engineerName: '',
-    organisation: '',
-  };
-}
-
-/**
- * A blank project, seeded from the current settings.
- * @param {ReturnType<typeof defaultSettings>} settings
- * @param {Partial<{name:string, client:string, location:string}>} [meta]
- * @returns {object}
- */
-export function createProject(settings, meta = {}) {
-  const now = new Date().toISOString();
-  const city = PAKISTAN_CITIES.find((c) => c.key === settings.defaultCityKey) ?? PAKISTAN_CITIES[0];
-  const dims = PANEL_DIMENSION_PRESETS[settings.defaultPanelWattage] ?? { widthMm: 2278, heightMm: 1134 };
-
-  return {
-    id: `prj_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-    name: meta.name ?? 'Untitled project',
-    client: meta.client ?? '',
-    location: meta.location ?? city.name + ', Pakistan',
-    engineer: settings.engineerName ?? '',
-    status: /** @type {ProjectStatus} */ ('Draft'),
-    notes: '',
-    createdAt: now,
-    updatedAt: now,
-    inputs: {
-      load: {
-        systemVoltage: settings.defaultSystemVoltage,
-        systemPhases: settings.defaultSystemPhases,
-        overallDiversity: 1,
-        spareCapacityPercent: 0,
-        loads: [],
-      },
-      cable: {
-        // 'load' takes the current from the load calculator; 'manual' uses the typed value.
-        source: 'load',
-        currentA: '',
-        loadKW: '',
-        material: 'copper',
-        insulation: 'pvc',
-        cores: settings.defaultSystemPhases === 3 ? 4 : 2,
-        installationMethod: 'C',
-        lengthM: 50,
-        ambientC: settings.defaultAmbientC,
-        groupedCircuits: 1,
-        derateOther: 1,
-        voltageDropLimitPercent: settings.defaultVoltageDropLimitPercent,
-        parallelRuns: 1,
-      },
-      solar: {
-        mode: 'instantaneous',
-        loadSource: 'load',
-        daytimeLoadKW: '',
-        dailyConsumptionKWh: 250,
-        cityKey: city.key,
-        peakSunHours: city.peakSunHours,
-        targetPercent: 100,
-        systemLossPercent: settings.defaultSystemLossPercent,
-        inverterEfficiency: settings.defaultInverterEfficiency,
-        futureLoadKW: 0,
-        futureEnergyKWh: 0,
-        tariffPkrPerKwh: settings.tariffPkrPerKwh,
-        exportFraction: 0,
-        exportTariffPkrPerKwh: settings.tariffPkrPerKwh,
-      },
-      panels: {
-        panelWattage: settings.defaultPanelWattage,
-        panelWidthMm: dims.widthMm,
-        panelHeightMm: dims.heightMm,
-        orientation: 'portrait',
-        mountingType: 'flatTilted',
-        tiltDeg: 15,
-        accessMarginPercent: 10,
-        designSolarAltitudeDeg: '',
-      },
-      inverter: {
-        systemType: 'gridTied',
-        dcAcRatioTarget: 1.2,
-        dcAcRatioMin: 1.0,
-        dcAcRatioMax: 1.3,
-        surgeFactor: 1.25,
-      },
-      boq: {
-        modulesPerString: 20,
-        stringsPerMppt: 2,
-        dcRunLengthM: 40,
-        acRunLengthM: 30,
-        dcCableSizeMm2: 6,
-        earthCableSizeMm2: 16,
-        sparesPercent: 10,
-        inverterCount: 1,
-      },
+    schemaVersion: 1,
+    profile: {
+      name: '',
+      currency: DEFAULT_CURRENCY,
+      monthlySalary: 0,
+      salaryPaymentDate: null, // day of month, 1-31
+      otherIncome: 0,
+      existingSavings: 0,
+      essentialMonthlyExpenses: 0,
+      existingDebt: 0,
+      onboardingComplete: false,
     },
-    /** User edits to the generated BOQ. null means "use the generated lines". */
-    boqLines: null,
-    ...meta,
+    ruleId: '50-30-20',
+    ruleConfig: null,
+    customCategories: [],
+    expenses: [], // { id, amount, categoryId, categoryKind, subcategory, date, paymentMethod, note, createdAt, isRecurring, recurringId }
+    recurring: [], // { id, name, amount, categoryId, categoryKind, subcategory, dayOfMonth, paymentMethod, active, generatedMonths: [] }
+    goals: [], // { id, title, targetAmount, currentAmount, monthlyContribution, createdAt }
+    emergencyFund: { currentAmount: 0, coverageMonths: 6 },
+    notificationSettings: {
+      budgetApproaching: true,
+      budgetExceeded: true,
+      recurringReminder: true,
+      salaryReminder: true,
+      monthlyReport: true,
+      savingsProgress: true,
+      emergencyFundProgress: true,
+      goalProgress: true,
+      unusualSpending: true,
+    },
   };
 }
 
-/** The demo project from the specification, used to seed a first run. */
-export function createDemoProject(settings) {
-  const p = createProject(settings, {
-    name: 'UBL Multan Branch',
-    client: 'United Bank Limited',
-    location: 'Multan, Pakistan',
-  });
-  p.notes = 'Demo project shipped with the app. A bank branch in Multan: banking-hall '
-    + 'air conditioning, a server room, UPS, lighting, IT, CCTV and general power, with a '
-    + 'rooftop PV system sized to cover the daytime load. The schedule is tuned so the '
-    + 'maximum demand lands at 43 kW on a 400 V three-phase supply at a power factor of '
-    + '0.90 — about 69 A — which is the worked example the calculators are checked against.';
-  p.inputs.load.loads = [
-    createLoadItem({ name: 'Split AC units (banking hall)', category: 'hvac', quantity: 11, ratedPower: 2, unit: 'kW', phase: 3, powerFactor: 0.88, diversityFactor: 0.9, hoursPerDay: 8 }),
-    createLoadItem({ name: 'Server room precision AC', category: 'hvac', quantity: 1, ratedPower: 5, unit: 'kW', phase: 3, powerFactor: 0.9, diversityFactor: 1, hoursPerDay: 24 }),
-    createLoadItem({ name: 'UPS (branch systems)', category: 'ups', quantity: 1, ratedPower: 10, unit: 'kVA', phase: 3, powerFactor: 0.9, diversityFactor: 0.8, hoursPerDay: 10 }),
-    createLoadItem({ name: 'General power sockets', category: 'socket', quantity: 20, ratedPower: 300, unit: 'W', phase: 1, powerFactor: 0.9, diversityFactor: 0.5, hoursPerDay: 8 }),
-    createLoadItem({ name: 'Computers and teller terminals', category: 'itEquipment', quantity: 20, ratedPower: 150, unit: 'W', phase: 1, powerFactor: 0.95, diversityFactor: 0.8, hoursPerDay: 9 }),
-    createLoadItem({ name: 'LED lighting', category: 'lighting', quantity: 50, ratedPower: 40, unit: 'W', phase: 1, powerFactor: 0.95, diversityFactor: 0.9, hoursPerDay: 10 }),
-    createLoadItem({ name: 'Signage and facade lighting', category: 'lighting', quantity: 1, ratedPower: 1.2, unit: 'kW', phase: 1, powerFactor: 0.95, diversityFactor: 1, hoursPerDay: 6 }),
-    createLoadItem({ name: 'CCTV and access control', category: 'security', quantity: 1, ratedPower: 500, unit: 'W', phase: 1, powerFactor: 0.9, diversityFactor: 1, hoursPerDay: 24 }),
-    createLoadItem({ name: 'ATM and cash machines', category: 'itEquipment', quantity: 2, ratedPower: 600, unit: 'W', phase: 1, powerFactor: 0.95, diversityFactor: 1, hoursPerDay: 24 }),
-    createLoadItem({ name: 'Water pump', category: 'motor', quantity: 1, ratedPower: 2, unit: 'HP', phase: 3, powerFactor: 0.85, diversityFactor: 0.6, hoursPerDay: 3 }),
-  ];
-  return p;
-}
-
-/** @returns {{version:number, projects:object[], activeProjectId:string|null, settings:object}} */
-function freshState() {
-  const settings = defaultSettings();
-  const demo = createDemoProject(settings);
-  return {
-    version: SCHEMA_VERSION,
-    projects: [demo],
-    activeProjectId: demo.id,
-    settings,
-  };
-}
-
-/**
- * Whether this environment offers a usable localStorage. Node (used by the test
- * suite) has none, and some browsers throw on access in private mode rather
- * than returning null — both are handled the same way: run in memory.
- * @returns {boolean}
- */
-function storageAvailable() {
-  try {
-    return typeof localStorage !== 'undefined' && localStorage !== null;
-  } catch {
-    return false;
+class SmartBudgetStore {
+  constructor() {
+    this.state = null;
+    this.listeners = new Set();
+    this.sessionKey = null; // in-memory CryptoKey while unlocked, for lock mode
   }
-}
 
-/** @returns {object} */
-function load() {
-  if (!storageAvailable()) return freshState();
-  try {
+  subscribe(fn) {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  }
+
+  notify() {
+    for (const fn of this.listeners) fn(this.state);
+  }
+
+  // ---------- Boot / lock ----------
+
+  getLockMeta() {
+    try {
+      const raw = localStorage.getItem(LOCK_META_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  isLockEnabled() {
+    const meta = this.getLockMeta();
+    return !!(meta && meta.enabled);
+  }
+
+  /** Load app state. Returns { needsUnlock: boolean }. If no lock is set,
+   * state is loaded immediately and needsUnlock is false. */
+  async boot() {
+    if (this.isLockEnabled()) {
+      return { needsUnlock: true };
+    }
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return freshState();
-    const parsed = JSON.parse(raw);
-    if (!parsed || !Array.isArray(parsed.projects)) return freshState();
-    return {
-      version: SCHEMA_VERSION,
-      projects: parsed.projects,
-      activeProjectId: parsed.activeProjectId ?? parsed.projects[0]?.id ?? null,
-      // Merge so a settings key added in a later version still has a value.
-      settings: { ...defaultSettings(), ...(parsed.settings ?? {}) },
-    };
-  } catch (err) {
-    console.warn('Could not read saved projects; starting fresh.', err);
-    return freshState();
+    this.state = raw ? JSON.parse(raw) : defaultState();
+    this.notify();
+    return { needsUnlock: false };
   }
-}
 
-/** @type {ReturnType<typeof freshState>} */
-let state = load();
-
-/** @type {Set<() => void>} */
-const listeners = new Set();
-
-let persistFailed = false;
-
-function persist() {
-  if (!storageAvailable()) return;
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    persistFailed = false;
-  } catch (err) {
-    // Private browsing or a full quota. Say so rather than losing work silently.
-    persistFailed = true;
-    console.warn('Could not save to this browser.', err);
-  }
-}
-
-function notify() {
-  for (const fn of listeners) fn();
-}
-
-/**
- * Subscribe to state changes.
- * @param {() => void} fn
- * @returns {() => void} Unsubscribe.
- */
-export function subscribe(fn) {
-  listeners.add(fn);
-  return () => listeners.delete(fn);
-}
-
-/** @returns {boolean} True when the last save to localStorage failed. */
-export const saveFailed = () => persistFailed;
-
-/** @returns {object[]} */
-export const getProjects = () => state.projects;
-
-/** @returns {object} */
-export const getSettings = () => state.settings;
-
-/** @returns {object|null} */
-export const getActiveProject = () =>
-  state.projects.find((p) => p.id === state.activeProjectId) ?? state.projects[0] ?? null;
-
-/** @param {string} id */
-export function setActiveProject(id) {
-  state.activeProjectId = id;
-  persist();
-  notify();
-}
-
-/**
- * Apply a mutation to the active project and re-render.
- * @param {(project: object) => void} mutator
- */
-export function updateActiveProject(mutator) {
-  const project = getActiveProject();
-  if (!project) return;
-  mutator(project);
-  project.updatedAt = new Date().toISOString();
-  persist();
-  notify();
-}
-
-/**
- * Set a value at a dotted path inside the active project, e.g.
- * `setField('inputs.solar.targetPercent', 80)`.
- * @param {string} path
- * @param {unknown} value
- */
-export function setField(path, value) {
-  updateActiveProject((project) => {
-    const keys = path.split('.');
-    let node = project;
-    for (const key of keys.slice(0, -1)) {
-      if (node[key] === undefined || node[key] === null) node[key] = {};
-      node = node[key];
+  async unlock(pin) {
+    const meta = this.getLockMeta();
+    if (!meta) throw new Error('No lock configured.');
+    const key = await deriveKeyFromPin(pin, meta.salt);
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      this.state = defaultState();
+      this.sessionKey = key;
+      this.notify();
+      return;
     }
-    node[keys.at(-1)] = value;
-  });
-}
-
-/**
- * Read a value at a dotted path from the active project.
- * @param {string} path
- * @returns {unknown}
- */
-export function getField(path) {
-  const project = getActiveProject();
-  if (!project) return undefined;
-  return path.split('.').reduce((node, key) => (node == null ? undefined : node[key]), project);
-}
-
-/**
- * @param {Partial<{name:string, client:string, location:string}>} [meta]
- * @returns {object} The new project.
- */
-export function addProject(meta) {
-  const project = createProject(state.settings, meta);
-  state.projects.unshift(project);
-  state.activeProjectId = project.id;
-  persist();
-  notify();
-  return project;
-}
-
-/**
- * Deep-copy a project under a new id and name.
- * @param {string} id
- * @returns {object|null}
- */
-export function duplicateProject(id) {
-  const source = state.projects.find((p) => p.id === id);
-  if (!source) return null;
-  const copy = structuredClone(source);
-  copy.id = `prj_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-  copy.name = `${source.name} (copy)`;
-  copy.status = 'Draft';
-  copy.createdAt = new Date().toISOString();
-  copy.updatedAt = copy.createdAt;
-  // Fresh ids for the load rows so editing the copy cannot touch the original.
-  for (const l of copy.inputs.load.loads) {
-    l.id = `load_${Math.random().toString(36).slice(2, 10)}`;
+    const envelope = JSON.parse(raw);
+    const plaintext = await decryptWithKey(envelope, key); // throws on wrong PIN
+    this.state = JSON.parse(plaintext);
+    this.sessionKey = key;
+    this.notify();
   }
-  state.projects.unshift(copy);
-  state.activeProjectId = copy.id;
-  persist();
-  notify();
-  return copy;
-}
 
-/** @param {string} id */
-export function deleteProject(id) {
-  state.projects = state.projects.filter((p) => p.id !== id);
-  if (state.activeProjectId === id) {
-    state.activeProjectId = state.projects[0]?.id ?? null;
+  lock() {
+    this.sessionKey = null;
+    this.state = null;
+    this.notify();
   }
-  persist();
-  notify();
-}
 
-/** @param {Partial<ReturnType<typeof defaultSettings>>} patch */
-export function updateSettings(patch) {
-  state.settings = { ...state.settings, ...patch };
-  persist();
-  notify();
-}
+  async enableLock(pin) {
+    const salt = bytesToBase64(randomBytes(16));
+    const key = await deriveKeyFromPin(pin, salt);
+    this.sessionKey = key;
+    localStorage.setItem(LOCK_META_KEY, JSON.stringify({ enabled: true, salt, autoLockMinutes: 5 }));
+    await this.persist();
+  }
 
-/** Restore the shipped demo project (used from Settings). */
-export function restoreDemoProject() {
-  const demo = createDemoProject(state.settings);
-  state.projects.unshift(demo);
-  state.activeProjectId = demo.id;
-  persist();
-  notify();
-  return demo;
-}
+  async disableLock() {
+    localStorage.removeItem(LOCK_META_KEY);
+    this.sessionKey = null;
+    await this.persist();
+  }
 
-/** Delete everything and start over. */
-export function resetAll() {
-  state = freshState();
-  persist();
-  notify();
-}
+  async changePin(newPin) {
+    const meta = this.getLockMeta();
+    const salt = bytesToBase64(randomBytes(16));
+    const key = await deriveKeyFromPin(newPin, salt);
+    this.sessionKey = key;
+    localStorage.setItem(LOCK_META_KEY, JSON.stringify({ ...meta, salt }));
+    await this.persist();
+  }
 
-/** @returns {string} The whole store as pretty JSON, for backup. */
-export const exportState = () => JSON.stringify(state, null, 2);
+  async persist() {
+    const json = JSON.stringify(this.state);
+    if (this.isLockEnabled() && this.sessionKey) {
+      const envelope = await encryptWithKey(json, this.sessionKey);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(envelope));
+    } else {
+      localStorage.setItem(STORAGE_KEY, json);
+    }
+  }
 
-/**
- * Replace the store from a previously exported JSON backup.
- * @param {string} json
- * @returns {{ ok: boolean, message: string }}
- */
-export function importState(json) {
-  try {
+  async commit(mutator) {
+    mutator(this.state);
+    await this.persist();
+    this.notify();
+  }
+
+  // ---------- Categories ----------
+
+  get categories() {
+    return mergeCategories(DEFAULT_CATEGORIES, this.state.customCategories);
+  }
+
+  async addCustomCategory({ label, kind, subcategories }) {
+    await this.commit((s) => {
+      s.customCategories.push({ id: generateId('cat'), label, kind, subcategories: subcategories || [] });
+    });
+  }
+
+  // ---------- Profile / onboarding ----------
+
+  async completeOnboarding(profile) {
+    await this.commit((s) => {
+      s.profile = { ...s.profile, ...profile, onboardingComplete: true };
+    });
+  }
+
+  async updateProfile(partial) {
+    await this.commit((s) => {
+      s.profile = { ...s.profile, ...partial };
+    });
+  }
+
+  // ---------- Budgeting rule ----------
+
+  get rule() {
+    return getRule(this.state.ruleId) || BUILTIN_RULES[0];
+  }
+
+  async setRule(ruleId, config) {
+    await this.commit((s) => {
+      s.ruleId = ruleId;
+      s.ruleConfig = config || null;
+    });
+  }
+
+  async updateRuleConfig(config) {
+    await this.commit((s) => {
+      s.ruleConfig = { ...(s.ruleConfig || {}), ...config };
+    });
+  }
+
+  // ---------- Expenses ----------
+
+  expensesForMonth(monthKeyStr) {
+    return this.state.expenses.filter((e) => e.date.slice(0, 7) === monthKeyStr);
+  }
+
+  expensesInRange(startDate, endDate) {
+    return this.state.expenses.filter((e) => e.date >= startDate && e.date <= endDate);
+  }
+
+  async addExpense({ amount, categoryId, subcategory, date, paymentMethod, note }) {
+    const categoryKind = findCategoryKind(this.categories, categoryId);
+    const expense = {
+      id: generateId('exp'),
+      amount: Number(amount),
+      categoryId,
+      categoryKind,
+      subcategory,
+      date,
+      paymentMethod: paymentMethod || 'Cash',
+      note: note || '',
+      createdAt: new Date().toISOString(),
+    };
+    await this.commit((s) => {
+      s.expenses.push(expense);
+    });
+    return expense;
+  }
+
+  async deleteExpense(id) {
+    await this.commit((s) => {
+      s.expenses = s.expenses.filter((e) => e.id !== id);
+    });
+  }
+
+  /** Non-mutating preview used by "Add Expense" (pre-save warning) and the
+   * dedicated "Can I Afford This?" screen. */
+  previewExpense({ amount, categoryId }, monthKeyStr = monthKeyOf()) {
+    const categoryKind = findCategoryKind(this.categories, categoryId);
+    const snapshot = this.getSnapshot(monthKeyStr);
+    return previewExpenseImpact(snapshot, { amount, categoryKind });
+  }
+
+  // ---------- Recurring expenses ----------
+
+  async addRecurring({ name, amount, categoryId, subcategory, dayOfMonth, paymentMethod }) {
+    const categoryKind = findCategoryKind(this.categories, categoryId);
+    await this.commit((s) => {
+      s.recurring.push({
+        id: generateId('rec'), name, amount: Number(amount), categoryId, categoryKind,
+        subcategory, dayOfMonth: Number(dayOfMonth), paymentMethod: paymentMethod || 'Auto',
+        active: true, generatedMonths: [],
+      });
+    });
+  }
+
+  async updateRecurring(id, partial) {
+    await this.commit((s) => {
+      const item = s.recurring.find((r) => r.id === id);
+      if (item) Object.assign(item, partial);
+    });
+  }
+
+  async deleteRecurring(id) {
+    await this.commit((s) => {
+      s.recurring = s.recurring.filter((r) => r.id !== id);
+    });
+  }
+
+  /** Materialize this month's recurring expenses (idempotent — a recurring
+   * item is only generated once per calendar month). Call on app load and
+   * whenever the dashboard is viewed. */
+  async generateRecurringForCurrentMonth() {
+    const key = monthKeyOf();
+    const generated = materializeForMonth(this.state.recurring, key);
+    if (generated.length === 0) return [];
+    await this.commit((s) => {
+      for (const g of generated) {
+        s.expenses.push({ id: generateId('exp'), note: g.note, ...g });
+        const recurringItem = s.recurring.find((r) => r.id === g.recurringId);
+        if (recurringItem) recurringItem.generatedMonths.push(key);
+      }
+    });
+    return generated;
+  }
+
+  getRecurringReminders() {
+    return upcomingReminders(this.state.recurring);
+  }
+
+  // ---------- Budget snapshot / alerts ----------
+
+  getSnapshot(monthKeyStr = monthKeyOf()) {
+    const expenses = this.expensesForMonth(monthKeyStr);
+    const snapshot = computeBudgetSnapshot({
+      rule: this.rule,
+      income: this.state.profile.monthlySalary,
+      otherIncome: this.state.profile.otherIncome,
+      config: this.state.ruleConfig,
+      expenses,
+    });
+    snapshot.categoryTotals = categoryTotalsList(expenses);
+    return snapshot;
+  }
+
+  getAlerts(monthKeyStr = monthKeyOf()) {
+    return buildAlerts(this.getSnapshot(monthKeyStr), this.state.profile.currency);
+  }
+
+  // ---------- Emergency fund ----------
+
+  get essentialMonthlyExpenses() {
+    if (this.state.profile.essentialMonthlyExpenses > 0) return this.state.profile.essentialMonthlyExpenses;
+    const needsGroup = this.getSnapshot().groups.find((g) => g.kind.includes('needs'));
+    return needsGroup ? needsGroup.allocated : 0;
+  }
+
+  getEmergencyFundStatus() {
+    const target = calculateTarget(this.essentialMonthlyExpenses, this.state.emergencyFund.coverageMonths);
+    return { ...calculateProgress(this.state.emergencyFund.currentAmount, target), coverageMonths: this.state.emergencyFund.coverageMonths };
+  }
+
+  async setEmergencyFundCoverage(months) {
+    await this.commit((s) => {
+      s.emergencyFund.coverageMonths = Number(months);
+    });
+  }
+
+  async contributeToEmergencyFund(amount, date = new Date().toISOString().slice(0, 10)) {
+    await this.commit((s) => {
+      s.emergencyFund.currentAmount = Math.round((s.emergencyFund.currentAmount + Number(amount)) * 100) / 100;
+      s.expenses.push({
+        id: generateId('exp'), amount: Number(amount), categoryId: 'savings', categoryKind: 'savings',
+        subcategory: 'Emergency Fund', date, paymentMethod: 'Transfer', note: 'Emergency fund contribution', createdAt: new Date().toISOString(),
+      });
+    });
+  }
+
+  // ---------- Goals ----------
+
+  getGoalsWithProgress() {
+    return this.state.goals.map((g) => ({ ...g, progress: goalProgress(g) }));
+  }
+
+  get totalMonthlyGoalContributions() {
+    return totalMonthlyGoalContributions(this.state.goals);
+  }
+
+  async addGoal({ title, targetAmount, currentAmount, monthlyContribution }) {
+    await this.commit((s) => {
+      s.goals.push({
+        id: generateId('goal'), title, targetAmount: Number(targetAmount),
+        currentAmount: Number(currentAmount) || 0, monthlyContribution: Number(monthlyContribution) || 0,
+        createdAt: new Date().toISOString(),
+      });
+    });
+  }
+
+  async updateGoal(id, partial) {
+    await this.commit((s) => {
+      const goal = s.goals.find((g) => g.id === id);
+      if (goal) Object.assign(goal, partial);
+    });
+  }
+
+  async deleteGoal(id) {
+    await this.commit((s) => {
+      s.goals = s.goals.filter((g) => g.id !== id);
+    });
+  }
+
+  async contributeToGoal(id, amount, date = new Date().toISOString().slice(0, 10)) {
+    await this.commit((s) => {
+      const goal = s.goals.find((g) => g.id === id);
+      if (!goal) return;
+      goal.currentAmount = Math.round((goal.currentAmount + Number(amount)) * 100) / 100;
+      s.expenses.push({
+        id: generateId('exp'), amount: Number(amount), categoryId: 'savings', categoryKind: 'savings',
+        subcategory: 'General Savings', date, paymentMethod: 'Transfer', note: `Goal contribution: ${goal.title}`, createdAt: new Date().toISOString(),
+      });
+    });
+  }
+
+  // ---------- Insights & reports ----------
+
+  getInsights(monthKeyStr = monthKeyOf()) {
+    const currentSnapshot = this.getSnapshot(monthKeyStr);
+    const previousKey = previousMonthKey(monthKeyStr);
+    const previousSnapshot = this.getSnapshot(previousKey);
+    return buildInsights({
+      currentSnapshot, previousSnapshot,
+      currentExpenses: this.expensesForMonth(monthKeyStr),
+      previousExpenses: this.expensesForMonth(previousKey),
+      emergencyFund: this.getEmergencyFundStatus(),
+      currency: this.state.profile.currency,
+    });
+  }
+
+  getMonthlyReport(monthKeyStr = monthKeyOf()) {
+    const snapshot = this.getSnapshot(monthKeyStr);
+    const previousSnapshot = this.getSnapshot(previousMonthKey(monthKeyStr));
+    const [year, month] = monthKeyStr.split('-').map(Number);
+    const monthLabel = new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    return generateMonthlyReport({
+      monthLabel, snapshot, previousSnapshot,
+      emergencyFundContribution: this.expensesForMonth(monthKeyStr).filter((e) => e.subcategory === 'Emergency Fund').reduce((a, e) => a + e.amount, 0),
+      goalContributions: this.expensesForMonth(monthKeyStr).filter((e) => e.note && e.note.startsWith('Goal contribution')).reduce((a, e) => a + e.amount, 0),
+    });
+  }
+
+  // ---------- Data export / account deletion ----------
+
+  exportData() {
+    return JSON.stringify(this.state, null, 2);
+  }
+
+  async importData(json) {
     const parsed = JSON.parse(json);
-    if (!parsed || !Array.isArray(parsed.projects)) {
-      return { ok: false, message: 'That file does not contain a PowerCalc project list.' };
-    }
-    state = {
-      version: SCHEMA_VERSION,
-      projects: parsed.projects,
-      activeProjectId: parsed.activeProjectId ?? parsed.projects[0]?.id ?? null,
-      settings: { ...defaultSettings(), ...(parsed.settings ?? {}) },
-    };
-    persist();
-    notify();
-    return { ok: true, message: `Imported ${state.projects.length} project(s).` };
-  } catch (err) {
-    return { ok: false, message: `Could not read that file: ${err.message}` };
+    await this.commit((s) => {
+      Object.assign(s, defaultState(), parsed);
+    });
+  }
+
+  async deleteAccount() {
+    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(LOCK_META_KEY);
+    this.sessionKey = null;
+    this.state = defaultState();
+    this.notify();
+  }
+
+  async updateNotificationSettings(partial) {
+    await this.commit((s) => {
+      s.notificationSettings = { ...s.notificationSettings, ...partial };
+    });
   }
 }
 
-/**
- * Convert the stored inputs into the shape the engine expects, dropping the
- * UI-only fields and turning "linked" values back into undefined so the engine
- * derives them from the previous stage.
- * @param {object} project
- * @returns {import('./engine/index.js').ProjectInputs}
- */
-export function toEngineInputs(project) {
-  const i = project.inputs;
-  const blank = (v) => v === '' || v === null || v === undefined;
-
-  return {
-    load: {
-      systemVoltage: Number(i.load.systemVoltage),
-      systemPhases: Number(i.load.systemPhases) === 3 ? 3 : 1,
-      overallDiversity: Number(i.load.overallDiversity),
-      spareCapacityPercent: Number(i.load.spareCapacityPercent),
-      loads: i.load.loads,
-    },
-    cable: {
-      material: i.cable.material,
-      insulation: i.cable.insulation,
-      cores: Number(i.cable.cores),
-      installationMethod: i.cable.installationMethod,
-      lengthM: Number(i.cable.lengthM),
-      ambientC: Number(i.cable.ambientC),
-      groupedCircuits: Number(i.cable.groupedCircuits),
-      derateOther: Number(i.cable.derateOther),
-      voltageDropLimitPercent: Number(i.cable.voltageDropLimitPercent),
-      parallelRuns: Number(i.cable.parallelRuns),
-      voltage: Number(i.load.systemVoltage),
-      phases: Number(i.load.systemPhases) === 3 ? 3 : 1,
-      // 'load' mode leaves both undefined so the engine uses the maximum demand.
-      ...(i.cable.source === 'manual' && !blank(i.cable.currentA)
-        ? { currentA: Number(i.cable.currentA) }
-        : {}),
-      ...(i.cable.source === 'manualKw' && !blank(i.cable.loadKW)
-        ? { loadKW: Number(i.cable.loadKW) }
-        : {}),
-    },
-    solar: {
-      mode: i.solar.mode,
-      cityKey: i.solar.cityKey,
-      peakSunHours: Number(i.solar.peakSunHours),
-      targetPercent: Number(i.solar.targetPercent),
-      systemLossPercent: Number(i.solar.systemLossPercent),
-      inverterEfficiency: Number(i.solar.inverterEfficiency),
-      futureLoadKW: Number(i.solar.futureLoadKW),
-      futureEnergyKWh: Number(i.solar.futureEnergyKWh),
-      tariffPkrPerKwh: Number(i.solar.tariffPkrPerKwh),
-      exportFraction: Number(i.solar.exportFraction),
-      exportTariffPkrPerKwh: Number(i.solar.exportTariffPkrPerKwh),
-      ...(i.solar.mode === 'instantaneous' && i.solar.loadSource === 'manual' && !blank(i.solar.daytimeLoadKW)
-        ? { daytimeLoadKW: Number(i.solar.daytimeLoadKW) }
-        : {}),
-      ...(i.solar.mode === 'dailyEnergy'
-        ? { dailyConsumptionKWh: Number(i.solar.dailyConsumptionKWh) }
-        : {}),
-    },
-    panels: {
-      panelWattage: Number(i.panels.panelWattage),
-      panelWidthMm: Number(i.panels.panelWidthMm),
-      panelHeightMm: Number(i.panels.panelHeightMm),
-      orientation: i.panels.orientation,
-      mountingType: i.panels.mountingType,
-      tiltDeg: Number(i.panels.tiltDeg),
-      accessMarginPercent: Number(i.panels.accessMarginPercent),
-      cityKey: i.solar.cityKey,
-      ...(blank(i.panels.designSolarAltitudeDeg)
-        ? {}
-        : { designSolarAltitudeDeg: Number(i.panels.designSolarAltitudeDeg) }),
-    },
-    inverter: {
-      systemType: i.inverter.systemType,
-      dcAcRatioTarget: Number(i.inverter.dcAcRatioTarget),
-      dcAcRatioMin: Number(i.inverter.dcAcRatioMin),
-      dcAcRatioMax: Number(i.inverter.dcAcRatioMax),
-      surgeFactor: Number(i.inverter.surgeFactor),
-      phases: Number(i.load.systemPhases) === 3 ? 3 : 1,
-    },
-    boq: {
-      modulesPerString: Number(i.boq.modulesPerString),
-      stringsPerMppt: Number(i.boq.stringsPerMppt),
-      dcRunLengthM: Number(i.boq.dcRunLengthM),
-      acRunLengthM: Number(i.boq.acRunLengthM),
-      dcCableSizeMm2: Number(i.boq.dcCableSizeMm2),
-      earthCableSizeMm2: Number(i.boq.earthCableSizeMm2),
-      sparesPercent: Number(i.boq.sparesPercent),
-      inverterCount: Number(i.boq.inverterCount),
-    },
-  };
+export function previousMonthKey(key) {
+  const [year, month] = key.split('-').map(Number);
+  const d = new Date(year, month - 2, 1);
+  return monthKeyOf(d);
 }
+
+export const store = new SmartBudgetStore();
+export { monthKeyOf as currentMonthKey };
