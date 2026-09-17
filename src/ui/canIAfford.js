@@ -1,20 +1,20 @@
 import { h, mount, page, field, textInput, selectInput, button } from './components.js';
 import { formatMoney } from '../engine/currency.js';
+import { subcategoryNames } from '../engine/categories.js';
 import { store } from '../store.js';
 
 export function renderCanIAfford(root, { navigate }) {
   const categories = store.categories;
-  const form = { amount: '', categoryId: categories[0]?.id || '', subcategory: categories[0]?.subcategories[0] || '' };
+  const form = { amount: '', categoryId: categories[0]?.id || '', subcategory: subcategoryNames(categories[0])[0] || '' };
   let result = null;
 
   function subcategoriesFor(categoryId) {
-    const cat = categories.find((c) => c.id === categoryId);
-    return cat ? cat.subcategories : [];
+    return subcategoryNames(categories.find((c) => c.id === categoryId));
   }
 
   function check() {
     if (!(Number(form.amount) > 0)) { result = null; render(); return; }
-    result = store.previewExpense({ amount: form.amount, categoryId: form.categoryId });
+    result = store.analyzePurchase({ amount: form.amount, categoryId: form.categoryId, subcategory: form.subcategory });
     render();
   }
 
@@ -31,7 +31,7 @@ export function renderCanIAfford(root, { navigate }) {
       field('Subcategory', selectInput({
         options: subcategoriesFor(form.categoryId).map((s) => ({ value: s, label: s })),
         value: form.subcategory,
-        onchange: (v) => (form.subcategory = v),
+        onchange: (v) => { form.subcategory = v; check(); },
       })),
       result ? resultCard(result, currency) : null,
       button('Add This Expense', {
@@ -46,17 +46,42 @@ export function renderCanIAfford(root, { navigate }) {
 }
 
 function resultCard(result, currency) {
+  const facts = [
+    factRow('Money left this month', formatMoney(result.incomeRemainingBefore, currency)),
+    result.group ? factRow(`${result.group.label} budget`, formatMoney(result.budgetAllocated, currency)) : null,
+    result.group ? factRow(`Spent on ${result.group.label} so far`, formatMoney(result.budgetSpent, currency)) : null,
+    result.group ? factRow(`${result.group.label} budget remaining`, formatMoney(result.budgetRemainingBefore, currency)) : null,
+    result.monthlyGoalContributions > 0 ? factRow('Committed to goals this month', formatMoney(result.monthlyGoalContributions, currency)) : null,
+    result.emergencyFundRemaining > 0 ? factRow('Emergency fund still to save', formatMoney(result.emergencyFundRemaining, currency)) : null,
+  ].filter(Boolean);
+
+  const notes = [];
   if (!result.group) {
-    return h('div', { class: 'card' }, "This category isn't covered by your current budgeting rule, so it won't count against any limit.");
+    notes.push(h('div', {}, "This category isn't covered by your current budgeting rule, so it won't count against any budget limit."));
+  } else if (result.willExceedBudget) {
+    notes.push(h('div', { class: 'text-strong' },
+      `Your ${result.group.label} budget has ${formatMoney(result.budgetRemainingBefore, currency)} remaining. This purchase would exceed that budget by ${formatMoney(result.exceededBy, currency)}.`));
+  } else {
+    notes.push(h('div', { class: 'text-strong' },
+      `This fits within your ${result.group.label} budget, leaving ${formatMoney(result.budgetRemainingAfter, currency)} in it.`));
   }
-  if (result.willExceed) {
-    return h('div', { class: 'card confirm-dialog' }, [
-      h('div', {}, `⚠️ This purchase will exceed your ${result.group.label} budget by ${formatMoney(result.exceededBy, currency)}.`),
-      h('div', { class: 'text-muted small' }, `${result.group.label}: ${formatMoney(result.group.spent, currency)} spent of ${formatMoney(result.group.allocated, currency)} so far.`),
-    ]);
+  if (result.willExceedIncome) {
+    notes.push(h('div', {}, `It would also take you ${formatMoney(Math.abs(result.incomeRemainingAfter), currency)} past the income you have left this month.`));
+  } else if (result.cutsIntoCommitments) {
+    notes.push(h('div', {}, `After the savings you've committed to your goals this month, this would leave you ${formatMoney(Math.abs(result.uncommittedAfter), currency)} short of those contributions.`));
   }
-  return h('div', { class: 'card' }, [
-    h('div', { class: 'text-strong' }, `🟢 This fits within your ${result.group.label} budget.`),
-    h('div', { class: 'text-muted small' }, `${formatMoney(result.newRemaining, currency)} would remain after this purchase.`),
+  notes.push(h('div', { class: 'text-muted small' }, "These are the numbers — the decision is yours."));
+
+  const level = !result.group ? '' : (result.willExceedBudget || result.willExceedIncome ? 'confirm-dialog' : '');
+  return h('div', { class: `card ${level}` }, [
+    h('div', { class: 'afford-notes' }, notes),
+    h('div', { class: 'afford-facts' }, facts),
+  ]);
+}
+
+function factRow(label, value) {
+  return h('div', { class: 'income-row' }, [
+    h('span', { class: 'text-muted' }, label),
+    h('span', {}, value),
   ]);
 }

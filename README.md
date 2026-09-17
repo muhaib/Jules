@@ -1,14 +1,18 @@
-# SmartBudget
+# SmartBudget — Personal Finance & Budgeting
 
-An intelligent, mobile-first personal budgeting assistant. You enter your
-income once, pick a budgeting framework, and SmartBudget calculates every
-limit for you — then keeps them updated in real time as you log expenses,
-warns you before you go over, tracks an emergency fund and financial goals,
-and generates a monthly report.
+*Know your money. Control your spending. Reach your goals.*
+
+A mobile-first personal finance app for anyone managing their own money.
+You add your income — from a job, freelance work, a business, or anywhere
+else — pick a budgeting framework, and SmartBudget calculates every limit
+for you, then keeps them updated in real time as you log expenses, warns
+you before you go over, and tracks your emergency fund and financial
+goals.
 
 It's a real working app, not a static prototype: every number on screen is
-computed from your income, chosen rule and logged expenses — nothing is
-hard-coded.
+computed from your own income, chosen rule and logged expenses. Nothing is
+hard-coded — no assumed salary, no assumed currency, no assumed country,
+profession or employer.
 
 ## Quick start
 
@@ -22,29 +26,49 @@ static app (see *Architecture* below).
 
 ## The core flow
 
-1. **Onboarding** — name (optional), currency (defaults to PKR), monthly
-   salary, salary date, other income, existing savings, essential monthly
-   expenses, existing debt (all but currency/salary optional).
+1. **Onboarding** — name (optional), currency (preselected from your
+   locale, changeable at any time), and one or more income sources. Each
+   source has a type (Salary, Freelance, Business, Part-time, Other), an
+   amount and a schedule — monthly, weekly, every two weeks, yearly, every
+   N months, or one-time. Current savings, essential monthly expenses and
+   existing debt are optional.
 2. **Choose a budgeting rule** — 50/30/20, 70/20/10, 80/20, Pay Yourself
    First (percent or fixed amount), or a fully Custom split. The screen
-   shows a live preview of what each rule means in Rupees for your income.
+   shows a live preview of what each rule means in your currency for your
+   income.
 3. **Add expenses** — amount, category → subcategory, date, payment
    method, optional note, in a few taps.
 4. **Everything recalculates immediately** — spent, remaining, % used, and
    whether you're approaching or over a limit, per budget group.
 5. **Alerts fire automatically** at 75% (info), 80% (warning), 90%
-   ("almost finished — only Rs. X remains") and 100%+ ("exceeded by Rs.
-   X"). Before saving an expense that would push a group over budget, you
-   get an "Add Anyway / Cancel" choice — SmartBudget never blocks a
+   ("almost finished — only X remains") and 100%+ ("exceeded by X").
+   Before saving an expense that would push a group over budget, you get
+   an "Add Anyway / Cancel" choice — SmartBudget never blocks a
    transaction, it only informs.
-6. **Emergency fund & goals** track cumulative progress toward a target,
-   with an estimated completion date from your monthly contribution.
+6. **Emergency fund & goals** — the emergency fund target is your own
+   essential monthly expenses times a coverage window you choose (3
+   months, 6 months or custom). Goals track progress toward a target, with
+   both an estimated completion date from your monthly contribution and
+   the contribution you'd need to hit a target date.
 7. **Reports & analytics** — a monthly financial summary (income,
    expenses, savings, savings rate, exceeded categories, largest spends,
    month-over-month comparison) plus category/trend charts filterable by
    month, quarter, half-year, year or a custom range.
 
 ## Architecture
+
+**Income engine (`src/engine/income.js`)** — a person's money can arrive
+from any number of sources on any schedule, so each source is normalized
+to a monthly equivalent (weekly × 52/12, yearly ÷ 12, every-N-months ÷ N)
+and summed into a single monthly basis the rules work from. One-time
+income counts only in the month it actually arrives, so a windfall lifts
+that month's budget and nothing else.
+
+**Currency (`src/engine/currency.js`)** — amounts are formatted through
+`Intl.NumberFormat`, which knows each currency's symbol, separators and
+minor unit (USD has two decimal places, JPY has none). 40+ currencies are
+selectable; the initial choice is derived from the user's locale and can
+be changed at any time. No amount anywhere in the app assumes a currency.
 
 **Rule engine (`src/engine/rules.js` + `src/engine/budget.js`)** — this is
 the piece the spec calls out explicitly: budgeting rules are *data*, never
@@ -61,18 +85,28 @@ amount; user-defined categories) instead of a fixed table.
 **Pure calculation core (`src/engine/*.js`)** — budget math, alert
 thresholds, emergency fund targets, goal progress, recurring-expense
 materialization, insights and monthly-report generation are all pure
-functions with no DOM/storage dependency, covered by 47 unit tests in
-`test/*.test.js` (`npm test`). Several tests reproduce the spec's own
-worked examples verbatim (the Rs. 80,000 / 50-30-20 example, the Wants
-95%→exceeded example, the "Can I afford this?" Rs. 5,000 example, the
-September report with its 29.75% savings rate) to keep the implementation
-honest against the spec, not just internally consistent.
+functions with no DOM/storage dependency, covered by 107 unit tests in
+`test/*.test.js` (`npm test`). Several reproduce worked examples verbatim
+(a $3,000 income split 1,500/900/600, the Wants 95%→exceeded case, the
+"Can I afford this?" overshoot, a report with a 29.75% savings rate), and
+a dedicated `edge-cases.test.js` covers what a public release actually
+meets: no income yet, tiny incomes, incomes in the billions, every budget
+group over at once, malformed amounts, and empty states.
 
 **State store (`src/store.js`)** — the single source of truth: profile,
-rule/config, categories, expenses, recurring items, goals, emergency fund,
-notification settings. All mutations go through store methods (`addExpense`,
-`contributeToGoal`, `setRule`, …); UI modules never touch `localStorage`
-directly.
+income sources, rule/config, categories, expenses, recurring items, goals,
+emergency fund, notification settings. All mutations go through store
+methods (`addExpense`, `contributeToGoal`, `setRule`, …); UI modules never
+touch `localStorage` directly. Stored data carries a schema version and is
+migrated forward on load (`migrateState`), so data written by an earlier
+version keeps working.
+
+**Categories (`src/engine/categories.js`)** — generic personal-finance
+groupings: Needs, Wants and Financial, each with editable subcategories,
+plus any custom categories the user creates. A subcategory can override
+its parent's budget kind, which is how "Debt Payment" sits under Financial
+for the user while still counting against a rule's debt group (the 10% in
+70/20/10).
 
 **UI (`src/ui/*.js`)** — a small hyperscript-style helper (`h()`) builds
 DOM directly; there's no framework and no build step, matching a
@@ -110,17 +144,35 @@ What that means concretely:
   encrypted transport) is a drop-in replacement for `store.js`'s
   persistence calls; the rule engine, calculation core and UI don't change.
 
-## What's implemented (MVP, spec section 21)
+## What's implemented
 
-User setup and income · 50/30/20 (+70/20/10, 80/20, Pay Yourself First,
-Custom — all live from day one via the rule engine, not staged later) ·
-Needs/Wants/Savings/Debt categories with custom categories · expense entry
-· real-time budget tracking · 75/80/90/100% alerts · in-app + browser
-push notifications · emergency fund tracker · dashboard · monthly report ·
-category/trend charts · financial goals · recurring expenses ·
-"Can I afford this?" checker · smart insights framed as benchmarks, never
-verdicts ("According to your selected budgeting rule…") · PIN lock,
-encryption at rest, export, and account deletion.
+Multiple income sources of any type and schedule · 40+ currencies with a
+locale-derived default · 50/30/20, 70/20/10, 80/20, Pay Yourself First and
+Custom rules · generic Needs/Wants/Financial categories plus custom ones ·
+expense entry · real-time budget tracking · 75/80/90/100% alerts ·
+in-app + browser notifications · emergency fund tracker sized from your
+own essential expenses · dashboard · monthly report · category/trend
+charts · financial goals with target dates and required contributions ·
+recurring expenses · "Can I afford this?" checker · insights framed as
+benchmarks, never verdicts ("According to your selected budgeting rule…")
+· PIN lock, encryption at rest, export, and account deletion.
+
+## Designed for any user
+
+The app models one person managing their own money. It makes no assumption
+about profession, employer, country, currency or income level:
+
+- **Income** is a list of sources, not a salary. Any mix of salary,
+  freelance, business, part-time and other income, on any schedule,
+  including irregular and one-time amounts.
+- **Currency** is chosen by the user from 40+ options and formatted by
+  `Intl`; the default comes from their locale.
+- **Categories, budgeting rules and percentages** are all user-editable
+  data, and custom ones can be added.
+- **Every figure** — budgets, alerts, emergency fund target, goal
+  projections, reports — is derived from what the user entered. There is
+  no sample data, no demo account and no hard-coded amount anywhere in the
+  app.
 
 ## Project layout
 
@@ -133,10 +185,13 @@ src/
   store.js             state, persistence, security, all mutations
   engine/               pure, unit-tested calculation core
     rules.js              the budgeting-rule engine
-    budget.js             allocation + spend + status calculation
+    budget.js             allocation + spend + status + affordability
+    income.js              income sources normalized to a monthly basis
     alerts.js              75/80/90/100% alert + pre-save warning copy
+    currency.js            Intl-based, currency-independent formatting
+    categories.js          generic categories + per-subcategory kinds
     emergencyFund.js, goals.js, recurring.js, insights.js, report.js
-    categories.js, currency.js, crypto.js, validation.js, id.js
+    crypto.js, validation.js, id.js
   ui/                   view modules + shared DOM/chart helpers
 test/                 node --test unit tests for the engine
 ```

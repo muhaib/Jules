@@ -107,17 +107,17 @@ async function runBackgroundChecks() {
     }
   }
 
-  const salaryDay = store.state.profile.salaryPaymentDate;
-  if (salaryDay) {
-    const diffDays = salaryDay - new Date().getDate();
-    if (diffDays >= 0 && diffDays <= 2) {
-      const key = `salary:${currentMonthKey()}`;
-      if (!seen.has(key)) {
-        notify(store, 'salaryReminder', { icon: '💰', message: `Your salary is expected ${diffDays === 0 ? 'today' : `in ${diffDays} day(s)`}.` });
-        seen.add(key);
-        changed = true;
-      }
-    }
+  // Income reminders, for any source the user gave a usual payment day.
+  for (const source of store.state.incomeSources) {
+    if (source.active === false || !source.paymentDay) continue;
+    const diffDays = source.paymentDay - new Date().getDate();
+    if (diffDays < 0 || diffDays > 2) continue;
+    const key = `income:${source.id}:${currentMonthKey()}`;
+    if (seen.has(key)) continue;
+    const label = source.label || source.type || 'Income';
+    notify(store, 'incomeReminder', { icon: '💰', message: `${label} is expected ${diffDays === 0 ? 'today' : `in ${diffDays} day(s)`}.` });
+    seen.add(key);
+    changed = true;
   }
 
   const lastSeenMonth = localStorage.getItem('smartbudget:v1:lastMonth');

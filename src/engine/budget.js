@@ -142,6 +142,43 @@ export function previewExpenseImpact(snapshot, { amount, categoryKind }) {
   };
 }
 
+/**
+ * The fuller "Can I afford this?" picture: how a planned purchase sits
+ * against the relevant category budget, the money left from this month's
+ * income, and the savings commitments the user has already made. It
+ * returns facts only — the decision is the user's, and the wording is the
+ * UI's, so nothing here assumes a currency.
+ */
+export function analyzePurchase(snapshot, { amount, categoryKind }, commitments = {}) {
+  const plannedAmount = Math.max(0, Number(amount) || 0);
+  const preview = previewExpenseImpact(snapshot, { amount: plannedAmount, categoryKind });
+  const monthlyGoalContributions = Math.max(0, Number(commitments.monthlyGoalContributions) || 0);
+  const emergencyFundRemaining = Math.max(0, Number(commitments.emergencyFundRemaining) || 0);
+
+  const incomeRemainingAfter = round2(snapshot.remainingIncome - plannedAmount);
+  // Money left this month once the savings the user has already committed
+  // to (goal contributions) are set aside.
+  const uncommittedAfter = round2(incomeRemainingAfter - monthlyGoalContributions);
+
+  return {
+    amount: plannedAmount,
+    group: preview.group,
+    budgetAllocated: preview.group ? preview.group.allocated : null,
+    budgetSpent: preview.group ? preview.group.spent : null,
+    budgetRemainingBefore: preview.group ? preview.group.remaining : null,
+    budgetRemainingAfter: preview.newRemaining,
+    willExceedBudget: preview.willExceed,
+    exceededBy: preview.exceededBy,
+    incomeRemainingBefore: snapshot.remainingIncome,
+    incomeRemainingAfter,
+    willExceedIncome: incomeRemainingAfter < 0,
+    monthlyGoalContributions,
+    uncommittedAfter,
+    cutsIntoCommitments: monthlyGoalContributions > 0 && uncommittedAfter < 0,
+    emergencyFundRemaining,
+  };
+}
+
 export function round2(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
 }

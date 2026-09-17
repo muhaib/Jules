@@ -9,9 +9,9 @@ const rule = getRule('50-30-20');
 
 test('September worked example report', () => {
   const expenses = [
-    { amount: 32500, categoryKind: 'needs', subcategory: 'Rent' },
-    { amount: 25200, categoryKind: 'wants', subcategory: 'Restaurants' },
-    { amount: 23800, categoryKind: 'savings', subcategory: 'General Savings' },
+    { amount: 32500, categoryKind: 'needs', subcategory: 'Housing' },
+    { amount: 25200, categoryKind: 'wants', subcategory: 'Dining out' },
+    { amount: 23800, categoryKind: 'savings', subcategory: 'Savings' },
   ];
   const snapshot = computeBudgetSnapshot({ rule, income: 80000, config: null, expenses });
   snapshot.categoryTotals = categoryTotalsList(expenses);
@@ -30,7 +30,7 @@ test('September worked example report', () => {
   // benchmark split) — both wants and savings show as exceeded here.
   assert.equal(report.exceededGroups.length, 2);
   assert.ok(report.exceededGroups.some((g) => g.id === 'wants'));
-  assert.equal(report.largestCategories[0].category, 'Rent');
+  assert.equal(report.largestCategories[0].category, 'Housing');
 });
 
 test('month-over-month comparison diffs income, expenses and savings', () => {

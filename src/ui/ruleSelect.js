@@ -15,7 +15,7 @@ export function renderRuleSelect(root, { navigate, onDone }) {
     { id: 'savings', label: 'Savings', kind: ['savings'], percent: 20 },
   ];
 
-  const income = (Number(store.state.profile.monthlySalary) || 0) + (Number(store.state.profile.otherIncome) || 0);
+  const income = store.monthlyIncome();
 
   function currentConfig() {
     if (selectedId === 'pay-yourself-first') {

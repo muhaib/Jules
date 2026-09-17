@@ -1,15 +1,15 @@
 import { h, mount, page, field, textInput, selectInput, button, emptyState } from './components.js';
 import { formatMoney } from '../engine/currency.js';
+import { subcategoryNames } from '../engine/categories.js';
 import { store } from '../store.js';
 
 export function renderRecurringView(root, { navigate }) {
   let showForm = false;
   const categories = store.categories;
-  const form = { name: '', amount: '', categoryId: categories[0]?.id || '', subcategory: categories[0]?.subcategories[0] || '', dayOfMonth: '1', paymentMethod: 'Auto' };
+  const form = { name: '', amount: '', categoryId: categories[0]?.id || '', subcategory: subcategoryNames(categories[0])[0] || '', dayOfMonth: '1', paymentMethod: 'Auto' };
 
   function subcategoriesFor(categoryId) {
-    const cat = categories.find((c) => c.id === categoryId);
-    return cat ? cat.subcategories : [];
+    return subcategoryNames(categories.find((c) => c.id === categoryId));
   }
 
   function render() {

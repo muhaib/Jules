@@ -1,12 +1,13 @@
 import { h, mount, page, field, textInput, selectInput, button } from './components.js';
-import { CURRENCIES } from '../engine/currency.js';
+import { CURRENCIES, currencyLabel, formatMoney } from '../engine/currency.js';
+import { INCOME_TYPES, FREQUENCIES } from '../engine/income.js';
 import { store } from '../store.js';
 
 const NOTIF_LABELS = {
   budgetApproaching: 'Budget approaching limit',
   budgetExceeded: 'Budget exceeded',
   recurringReminder: 'Recurring expense reminders',
-  salaryReminder: 'Salary/income reminder',
+  incomeReminder: 'Income reminder',
   monthlyReport: 'Monthly report ready',
   savingsProgress: 'Savings progress',
   emergencyFundProgress: 'Emergency fund progress',
@@ -24,15 +25,50 @@ export function renderSettingsView(root, { navigate }) {
       h('div', { class: 'card' }, [
         field('Name', textInput({ value: profile.name, oninput: async (v) => { await store.updateProfile({ name: v }); } })),
         field('Currency', selectInput({
-          options: CURRENCIES.map((c) => ({ value: c.code, label: `${c.code} — ${c.label}` })),
+          options: CURRENCIES.map((c) => ({ value: c.code, label: currencyLabel(c.code) })),
           value: profile.currency,
           onchange: async (v) => { await store.updateProfile({ currency: v }); render(); },
         })),
-        field('Monthly salary / income', textInput({ type: 'number', min: '0', value: profile.monthlySalary, oninput: async (v) => { await store.updateProfile({ monthlySalary: Number(v) || 0 }); } })),
-        field('Other income', textInput({ type: 'number', min: '0', value: profile.otherIncome, oninput: async (v) => { await store.updateProfile({ otherIncome: Number(v) || 0 }); } })),
-        field('Salary payment date', textInput({ type: 'number', min: '1', max: '31', value: profile.salaryPaymentDate, oninput: async (v) => { await store.updateProfile({ salaryPaymentDate: Number(v) || 1 }); } })),
         field('Monthly essential expenses', textInput({ type: 'number', min: '0', value: profile.essentialMonthlyExpenses, oninput: async (v) => { await store.updateProfile({ essentialMonthlyExpenses: Number(v) || 0 }); render(); } })),
       ]),
+
+      h('div', { class: 'section-title-row' }, [
+        h('span', { class: 'section-title' }, 'Income Sources'),
+        h('span', { class: 'text-muted small' }, `${formatMoney(store.recurringMonthlyIncome, profile.currency)}/mo`),
+      ]),
+      ...store.incomeBreakdown().map((source) => h('div', { class: 'card' }, [
+        h('div', { class: 'budget-card-head' }, [
+          h('span', { class: 'text-strong' }, source.label || source.type),
+          h('button', {
+            class: 'icon-btn',
+            onclick: async () => { if (confirm(`Remove "${source.label || source.type}"?`)) { await store.deleteIncomeSource(source.id); render(); } },
+          }, 'Remove'),
+        ]),
+        field('Type', selectInput({
+          options: INCOME_TYPES.map((t) => ({ value: t, label: t })),
+          value: source.type,
+          onchange: async (v) => { await store.updateIncomeSource(source.id, { type: v }); render(); },
+        })),
+        field('Amount', textInput({ type: 'number', min: '0', value: source.amount, oninput: async (v) => { await store.updateIncomeSource(source.id, { amount: Math.max(0, Number(v) || 0) }); } })),
+        field('How often', selectInput({
+          options: FREQUENCIES.map((f) => ({ value: f.id, label: f.label })),
+          value: source.frequency,
+          onchange: async (v) => { await store.updateIncomeSource(source.id, { frequency: v }); render(); },
+        })),
+        source.frequency === 'custom'
+          ? field('Months between payments', textInput({ type: 'number', min: '1', value: source.everyMonths || 1, oninput: async (v) => { await store.updateIncomeSource(source.id, { everyMonths: Math.max(1, Number(v) || 1) }); } }))
+          : null,
+        source.frequency === 'one-time'
+          ? field('Date received', textInput({ type: 'date', value: source.date || '', oninput: async (v) => { await store.updateIncomeSource(source.id, { date: v }); render(); } }))
+          : null,
+        h('div', { class: 'text-muted small' }, source.frequency === 'monthly'
+          ? 'Counts in full every month.'
+          : `Counts as ${formatMoney(source.monthlyAmount, profile.currency)} toward this month's budget.`),
+      ])),
+      button('+ Add Income Source', {
+        variant: 'ghost', className: 'btn-block',
+        onClick: async () => { await store.addIncomeSource({ label: '', type: 'Other', amount: 0, frequency: 'monthly' }); render(); },
+      }),
 
       h('div', { class: 'section-title' }, 'Budgeting'),
       h('div', { class: 'card link-card', onclick: () => navigate('#/rule-select?from=settings') }, `Current rule: ${store.rule.name} →`),

@@ -3,10 +3,11 @@
 // getters here and call actions to mutate state — nothing touches
 // localStorage directly outside this file.
 
-import { DEFAULT_CATEGORIES, mergeCategories, findCategoryKind } from './engine/categories.js';
-import { DEFAULT_CURRENCY } from './engine/currency.js';
+import { DEFAULT_CATEGORIES, mergeCategories, resolveKind } from './engine/categories.js';
+import { detectCurrency } from './engine/currency.js';
+import { monthlyIncomeFor, recurringMonthlyIncome, incomeBreakdown, makeIncomeSource } from './engine/income.js';
 import { getRule, BUILTIN_RULES } from './engine/rules.js';
-import { computeBudgetSnapshot, previewExpenseImpact } from './engine/budget.js';
+import { computeBudgetSnapshot, previewExpenseImpact, analyzePurchase } from './engine/budget.js';
 import { buildAlerts } from './engine/alerts.js';
 import { calculateTarget, calculateProgress } from './engine/emergencyFund.js';
 import { goalProgress, totalMonthlyGoalContributions } from './engine/goals.js';
@@ -19,32 +20,34 @@ import { encryptWithKey, decryptWithKey, deriveKeyFromPin, randomBytes, bytesToB
 const STORAGE_KEY = 'smartbudget:v1:state';
 const LOCK_META_KEY = 'smartbudget:v1:lock';
 
+export const SCHEMA_VERSION = 2;
+
 function defaultState() {
   return {
-    schemaVersion: 1,
+    schemaVersion: SCHEMA_VERSION,
     profile: {
       name: '',
-      currency: DEFAULT_CURRENCY,
-      monthlySalary: 0,
-      salaryPaymentDate: null, // day of month, 1-31
-      otherIncome: 0,
+      currency: detectCurrency(),
       existingSavings: 0,
       essentialMonthlyExpenses: 0,
       existingDebt: 0,
       onboardingComplete: false,
     },
+    // Any number of income sources, of any type, on any schedule.
+    // { id, label, type, amount, frequency, everyMonths, date, paymentDay, active }
+    incomeSources: [],
     ruleId: '50-30-20',
     ruleConfig: null,
     customCategories: [],
     expenses: [], // { id, amount, categoryId, categoryKind, subcategory, date, paymentMethod, note, createdAt, isRecurring, recurringId }
     recurring: [], // { id, name, amount, categoryId, categoryKind, subcategory, dayOfMonth, paymentMethod, active, generatedMonths: [] }
-    goals: [], // { id, title, targetAmount, currentAmount, monthlyContribution, createdAt }
+    goals: [], // { id, title, targetAmount, currentAmount, monthlyContribution, targetDate, createdAt }
     emergencyFund: { currentAmount: 0, coverageMonths: 6 },
     notificationSettings: {
       budgetApproaching: true,
       budgetExceeded: true,
       recurringReminder: true,
-      salaryReminder: true,
+      incomeReminder: true,
       monthlyReport: true,
       savingsProgress: true,
       emergencyFundProgress: true,
@@ -52,6 +55,63 @@ function defaultState() {
       unusualSpending: true,
     },
   };
+}
+
+// Category ids and subcategory names changed when the app moved to
+// generic personal-finance categories; expenses keep their own
+// categoryKind, so only the labels they point at need remapping.
+const LEGACY_CATEGORY_IDS = { savings: 'financial', debt: 'financial' };
+const LEGACY_SUBCATEGORIES = {
+  Rent: 'Housing', Electricity: 'Utilities', Gas: 'Utilities', Water: 'Utilities',
+  Medical: 'Healthcare', 'Phone/Internet': 'Communication', Restaurants: 'Dining out',
+  Subscriptions: 'Non-essential subscriptions', 'General Savings': 'Savings',
+  Investment: 'Investments', 'Loan Installment': 'Debt Payment', 'Credit Card': 'Debt Payment',
+};
+
+function migrateCategoryRef(item) {
+  if (LEGACY_CATEGORY_IDS[item.categoryId]) item.categoryId = LEGACY_CATEGORY_IDS[item.categoryId];
+  if (LEGACY_SUBCATEGORIES[item.subcategory]) item.subcategory = LEGACY_SUBCATEGORIES[item.subcategory];
+}
+
+/**
+ * Bring stored data forward to the current schema. v1 held a single
+ * salary plus an "other income" figure; v2 holds a list of income sources.
+ */
+export function migrateState(stored) {
+  const state = { ...defaultState(), ...stored };
+  state.profile = { ...defaultState().profile, ...(stored.profile || {}) };
+
+  if (!stored.schemaVersion || stored.schemaVersion < 2) {
+    const sources = [];
+    const salary = Number(state.profile.monthlySalary) || 0;
+    const other = Number(state.profile.otherIncome) || 0;
+    if (salary > 0) {
+      sources.push({
+        id: generateId('inc'),
+        ...makeIncomeSource({ label: 'Primary income', type: 'Salary', amount: salary, frequency: 'monthly', paymentDay: state.profile.salaryPaymentDate }),
+      });
+    }
+    if (other > 0) {
+      sources.push({ id: generateId('inc'), ...makeIncomeSource({ label: 'Other income', type: 'Other', amount: other, frequency: 'monthly' }) });
+    }
+    state.incomeSources = (stored.incomeSources && stored.incomeSources.length) ? stored.incomeSources : sources;
+
+    for (const expense of state.expenses || []) migrateCategoryRef(expense);
+    for (const item of state.recurring || []) migrateCategoryRef(item);
+
+    const notifications = { ...defaultState().notificationSettings, ...(stored.notificationSettings || {}) };
+    if ('salaryReminder' in notifications) {
+      notifications.incomeReminder = notifications.salaryReminder;
+      delete notifications.salaryReminder;
+    }
+    state.notificationSettings = notifications;
+  }
+
+  delete state.profile.monthlySalary;
+  delete state.profile.otherIncome;
+  delete state.profile.salaryPaymentDate;
+  state.schemaVersion = SCHEMA_VERSION;
+  return state;
 }
 
 class SmartBudgetStore {
@@ -93,7 +153,7 @@ class SmartBudgetStore {
       return { needsUnlock: true };
     }
     const raw = localStorage.getItem(STORAGE_KEY);
-    this.state = raw ? JSON.parse(raw) : defaultState();
+    this.state = raw ? migrateState(JSON.parse(raw)) : defaultState();
     this.notify();
     return { needsUnlock: false };
   }
@@ -111,7 +171,7 @@ class SmartBudgetStore {
     }
     const envelope = JSON.parse(raw);
     const plaintext = await decryptWithKey(envelope, key); // throws on wrong PIN
-    this.state = JSON.parse(plaintext);
+    this.state = migrateState(JSON.parse(plaintext));
     this.sessionKey = key;
     this.notify();
   }
@@ -175,9 +235,46 @@ class SmartBudgetStore {
 
   // ---------- Profile / onboarding ----------
 
-  async completeOnboarding(profile) {
+  async completeOnboarding({ incomeSources, ...profile }) {
     await this.commit((s) => {
       s.profile = { ...s.profile, ...profile, onboardingComplete: true };
+      if (incomeSources) {
+        s.incomeSources = incomeSources.map((source) => ({ id: generateId('inc'), ...makeIncomeSource(source) }));
+      }
+    });
+  }
+
+  // ---------- Income ----------
+
+  /** The income basis the budget is built from for a given month. */
+  monthlyIncome(monthKeyStr = monthKeyOf()) {
+    return monthlyIncomeFor(this.state.incomeSources, monthKeyStr);
+  }
+
+  get recurringMonthlyIncome() {
+    return recurringMonthlyIncome(this.state.incomeSources);
+  }
+
+  incomeBreakdown(monthKeyStr = monthKeyOf()) {
+    return incomeBreakdown(this.state.incomeSources, monthKeyStr);
+  }
+
+  async addIncomeSource(source) {
+    await this.commit((s) => {
+      s.incomeSources.push({ id: generateId('inc'), ...makeIncomeSource(source) });
+    });
+  }
+
+  async updateIncomeSource(id, partial) {
+    await this.commit((s) => {
+      const source = s.incomeSources.find((i) => i.id === id);
+      if (source) Object.assign(source, partial);
+    });
+  }
+
+  async deleteIncomeSource(id) {
+    await this.commit((s) => {
+      s.incomeSources = s.incomeSources.filter((i) => i.id !== id);
     });
   }
 
@@ -217,7 +314,7 @@ class SmartBudgetStore {
   }
 
   async addExpense({ amount, categoryId, subcategory, date, paymentMethod, note }) {
-    const categoryKind = findCategoryKind(this.categories, categoryId);
+    const categoryKind = resolveKind(this.categories, categoryId, subcategory);
     const expense = {
       id: generateId('exp'),
       amount: Number(amount),
@@ -243,16 +340,27 @@ class SmartBudgetStore {
 
   /** Non-mutating preview used by "Add Expense" (pre-save warning) and the
    * dedicated "Can I Afford This?" screen. */
-  previewExpense({ amount, categoryId }, monthKeyStr = monthKeyOf()) {
-    const categoryKind = findCategoryKind(this.categories, categoryId);
+  previewExpense({ amount, categoryId, subcategory }, monthKeyStr = monthKeyOf()) {
+    const categoryKind = resolveKind(this.categories, categoryId, subcategory);
     const snapshot = this.getSnapshot(monthKeyStr);
     return previewExpenseImpact(snapshot, { amount, categoryKind });
+  }
+
+  /** The fuller "Can I afford this?" analysis, including how the purchase
+   * sits against income left this month and existing savings commitments. */
+  analyzePurchase({ amount, categoryId, subcategory }, monthKeyStr = monthKeyOf()) {
+    const categoryKind = resolveKind(this.categories, categoryId, subcategory);
+    const snapshot = this.getSnapshot(monthKeyStr);
+    return analyzePurchase(snapshot, { amount, categoryKind }, {
+      monthlyGoalContributions: this.totalMonthlyGoalContributions,
+      emergencyFundRemaining: this.getEmergencyFundStatus().remaining,
+    });
   }
 
   // ---------- Recurring expenses ----------
 
   async addRecurring({ name, amount, categoryId, subcategory, dayOfMonth, paymentMethod }) {
-    const categoryKind = findCategoryKind(this.categories, categoryId);
+    const categoryKind = resolveKind(this.categories, categoryId, subcategory);
     await this.commit((s) => {
       s.recurring.push({
         id: generateId('rec'), name, amount: Number(amount), categoryId, categoryKind,
@@ -302,8 +410,7 @@ class SmartBudgetStore {
     const expenses = this.expensesForMonth(monthKeyStr);
     const snapshot = computeBudgetSnapshot({
       rule: this.rule,
-      income: this.state.profile.monthlySalary,
-      otherIncome: this.state.profile.otherIncome,
+      income: this.monthlyIncome(monthKeyStr),
       config: this.state.ruleConfig,
       expenses,
     });
@@ -338,7 +445,7 @@ class SmartBudgetStore {
     await this.commit((s) => {
       s.emergencyFund.currentAmount = Math.round((s.emergencyFund.currentAmount + Number(amount)) * 100) / 100;
       s.expenses.push({
-        id: generateId('exp'), amount: Number(amount), categoryId: 'savings', categoryKind: 'savings',
+        id: generateId('exp'), amount: Number(amount), categoryId: 'financial', categoryKind: 'savings',
         subcategory: 'Emergency Fund', date, paymentMethod: 'Transfer', note: 'Emergency fund contribution', createdAt: new Date().toISOString(),
       });
     });
@@ -354,11 +461,12 @@ class SmartBudgetStore {
     return totalMonthlyGoalContributions(this.state.goals);
   }
 
-  async addGoal({ title, targetAmount, currentAmount, monthlyContribution }) {
+  async addGoal({ title, targetAmount, currentAmount, monthlyContribution, targetDate }) {
     await this.commit((s) => {
       s.goals.push({
         id: generateId('goal'), title, targetAmount: Number(targetAmount),
         currentAmount: Number(currentAmount) || 0, monthlyContribution: Number(monthlyContribution) || 0,
+        targetDate: targetDate || null,
         createdAt: new Date().toISOString(),
       });
     });
@@ -383,8 +491,8 @@ class SmartBudgetStore {
       if (!goal) return;
       goal.currentAmount = Math.round((goal.currentAmount + Number(amount)) * 100) / 100;
       s.expenses.push({
-        id: generateId('exp'), amount: Number(amount), categoryId: 'savings', categoryKind: 'savings',
-        subcategory: 'General Savings', date, paymentMethod: 'Transfer', note: `Goal contribution: ${goal.title}`, createdAt: new Date().toISOString(),
+        id: generateId('exp'), amount: Number(amount), categoryId: 'financial', categoryKind: 'savings',
+        subcategory: 'Financial Goals', date, paymentMethod: 'Transfer', note: `Goal contribution: ${goal.title}`, createdAt: new Date().toISOString(),
       });
     });
   }
@@ -408,7 +516,7 @@ class SmartBudgetStore {
     const snapshot = this.getSnapshot(monthKeyStr);
     const previousSnapshot = this.getSnapshot(previousMonthKey(monthKeyStr));
     const [year, month] = monthKeyStr.split('-').map(Number);
-    const monthLabel = new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    const monthLabel = new Date(year, month - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
     return generateMonthlyReport({
       monthLabel, snapshot, previousSnapshot,
       emergencyFundContribution: this.expensesForMonth(monthKeyStr).filter((e) => e.subcategory === 'Emergency Fund').reduce((a, e) => a + e.amount, 0),
@@ -423,7 +531,7 @@ class SmartBudgetStore {
   }
 
   async importData(json) {
-    const parsed = JSON.parse(json);
+    const parsed = migrateState(JSON.parse(json));
     await this.commit((s) => {
       Object.assign(s, defaultState(), parsed);
     });

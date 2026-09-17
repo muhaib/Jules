@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateExpenseInput, validateOnboardingInput, validateGoalInput } from '../src/engine/validation.js';
+import { validateExpenseInput, validateOnboardingInput, validateGoalInput, validateIncomeSource } from '../src/engine/validation.js';
 
 test('validateExpenseInput requires amount, category, subcategory, date', () => {
   const result = validateExpenseInput({ amount: 0, categoryId: '', subcategory: '', date: '' });
@@ -16,9 +16,19 @@ test('validateExpenseInput passes with valid input', () => {
   assert.equal(result.valid, true);
 });
 
-test('validateOnboardingInput requires currency and a positive salary', () => {
-  const result = validateOnboardingInput({ currency: '', monthlySalary: -5 });
-  assert.equal(result.valid, false);
+test('validateOnboardingInput requires a currency and at least one real income source', () => {
+  assert.equal(validateOnboardingInput({ currency: '', incomeSources: [] }).valid, false);
+  assert.equal(validateOnboardingInput({ currency: 'USD', incomeSources: [] }).valid, false);
+  assert.equal(validateOnboardingInput({ currency: 'USD', incomeSources: [{ amount: 0 }] }).valid, false);
+  assert.equal(validateOnboardingInput({ currency: 'USD', incomeSources: [{ amount: 2500 }] }).valid, true);
+});
+
+test('validateIncomeSource checks amount and frequency-specific fields', () => {
+  assert.equal(validateIncomeSource({ amount: 0, frequency: 'monthly' }).valid, false);
+  assert.equal(validateIncomeSource({ amount: 500, frequency: 'custom', everyMonths: 0 }).valid, false);
+  assert.equal(validateIncomeSource({ amount: 500, frequency: 'custom', everyMonths: 3 }).valid, true);
+  assert.equal(validateIncomeSource({ amount: 500, frequency: 'one-time', date: '' }).valid, false);
+  assert.equal(validateIncomeSource({ amount: 500, frequency: 'one-time', date: '2026-03-01' }).valid, true);
 });
 
 test('validateGoalInput requires title and positive target', () => {

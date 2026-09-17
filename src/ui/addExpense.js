@@ -1,5 +1,6 @@
 import { h, mount, page, field, textInput, selectInput, button } from './components.js';
 import { validateExpenseInput } from '../engine/validation.js';
+import { subcategoryNames } from '../engine/categories.js';
 import { formatMoney } from '../engine/currency.js';
 import { store } from '../store.js';
 
@@ -10,7 +11,7 @@ export function renderAddExpense(root, { navigate }) {
   const form = {
     amount: '',
     categoryId: categories[0]?.id || '',
-    subcategory: categories[0]?.subcategories[0] || '',
+    subcategory: subcategoryNames(categories[0])[0] || '',
     date: new Date().toISOString().slice(0, 10),
     paymentMethod: 'Cash',
     note: '',
@@ -19,8 +20,7 @@ export function renderAddExpense(root, { navigate }) {
   let confirmState = null; // { preview, groupLabel } when a confirm dialog is showing
 
   function subcategoriesFor(categoryId) {
-    const cat = categories.find((c) => c.id === categoryId);
-    return cat ? cat.subcategories : [];
+    return subcategoryNames(categories.find((c) => c.id === categoryId));
   }
 
   async function save() {
@@ -30,7 +30,7 @@ export function renderAddExpense(root, { navigate }) {
       render();
       return;
     }
-    const preview = store.previewExpense({ amount: form.amount, categoryId: form.categoryId });
+    const preview = store.previewExpense({ amount: form.amount, categoryId: form.categoryId, subcategory: form.subcategory });
     if (preview.willExceed && !confirmState) {
       confirmState = { preview, groupLabel: preview.group.label };
       render();

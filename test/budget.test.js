@@ -5,9 +5,26 @@ import { calculateAllocations, computeBudgetSnapshot, previewExpenseImpact, stat
 
 const rule502030 = getRule('50-30-20');
 
-test('worked example: Rs. 80,000 salary under 50/30/20', () => {
-  const allocations = calculateAllocations(rule502030, 80000, null);
-  assert.deepEqual(allocations.map((g) => g.allocated), [40000, 24000, 16000]);
+test('50/30/20 splits any income into needs/wants/savings', () => {
+  assert.deepEqual(calculateAllocations(rule502030, 3000, null).map((g) => g.allocated), [1500, 900, 600]);
+  assert.deepEqual(calculateAllocations(rule502030, 80000, null).map((g) => g.allocated), [40000, 24000, 16000]);
+});
+
+test('dashboard example: $3,000 income with spending across all three groups', () => {
+  const snapshot = computeBudgetSnapshot({
+    rule: rule502030, income: 3000, config: null,
+    expenses: [
+      { amount: 1450, categoryKind: 'needs' },
+      { amount: 620, categoryKind: 'wants' },
+      { amount: 500, categoryKind: 'savings' },
+    ],
+  });
+  const [needs, wants, savings] = snapshot.groups;
+  assert.equal(needs.percentUsed, 96.67);
+  assert.equal(wants.percentUsed, 68.89);
+  assert.equal(savings.percentUsed, 83.33);
+  assert.equal(snapshot.remainingIncome, 430);
+  assert.equal(snapshot.groups.every((g) => g.status !== 'exceeded'), true);
 });
 
 test('allocations update automatically when income changes', () => {
@@ -46,7 +63,7 @@ test('dashboard worked example: needs/wants/savings status', () => {
   assert.equal(savings.percentUsed, 139.38);
 });
 
-test('"can I afford this?" preview: Rs. 5,000 shopping against Rs. 3,200 remaining', () => {
+test('"can I afford this?" preview quantifies the overshoot', () => {
   const expenses = [{ amount: 20800, categoryKind: 'wants' }];
   const snapshot = computeBudgetSnapshot({ rule: rule502030, income: 80000, config: null, expenses });
   const preview = previewExpenseImpact(snapshot, { amount: 5000, categoryKind: 'wants' });
@@ -70,7 +87,7 @@ test('unassigned spend (no matching group kind) is tracked separately, never dro
   assert.equal(snapshot.totalSpent, 5000);
 });
 
-test('otherIncome is included in totalIncome and reallocated across groups', () => {
+test('additional income is included in totalIncome and reallocated across groups', () => {
   const snapshot = computeBudgetSnapshot({ rule: rule502030, income: 80000, otherIncome: 20000, config: null, expenses: [] });
   assert.equal(snapshot.totalIncome, 100000);
   const needs = snapshot.groups.find((g) => g.id === 'needs');

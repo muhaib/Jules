@@ -47,7 +47,7 @@ const SETTING_KEY_BY_TYPE = {
   budgetApproaching: 'budgetApproaching',
   budgetExceeded: 'budgetExceeded',
   recurringReminder: 'recurringReminder',
-  salaryReminder: 'salaryReminder',
+  incomeReminder: 'incomeReminder',
   monthlyReport: 'monthlyReport',
   savingsProgress: 'savingsProgress',
   emergencyFundProgress: 'emergencyFundProgress',

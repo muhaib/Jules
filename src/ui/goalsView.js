@@ -6,7 +6,7 @@ import { store } from '../store.js';
 
 export function renderGoalsView(root, { navigate }) {
   let showForm = false;
-  const form = { title: GOAL_TEMPLATES[0], targetAmount: '', currentAmount: '', monthlyContribution: '' };
+  const form = { title: GOAL_TEMPLATES[0], customTitle: '', targetAmount: '', currentAmount: '', monthlyContribution: '', targetDate: '' };
   let errors = {};
 
   function render() {
@@ -21,22 +21,31 @@ export function renderGoalsView(root, { navigate }) {
       progressBar(g.progress.progressPercent, g.progress.isComplete ? 'ok' : 'approaching'),
       h('div', { class: 'budget-card-foot' }, [
         h('span', {}, `${formatMoney(g.currentAmount, currency)} / ${formatMoney(g.targetAmount, currency)}`),
-        g.progress.monthsToComplete !== null ? h('span', { class: 'text-muted' }, `${g.progress.monthsToComplete} mo left`) : null,
+        g.progress.monthsToComplete ? h('span', { class: 'text-muted' }, `${g.progress.monthsToComplete} mo left`) : null,
       ]),
     ]));
 
     const formNode = showForm ? h('div', { class: 'card' }, [
-      field('Goal', selectInput({ options: GOAL_TEMPLATES.map((t) => ({ value: t, label: t })), value: form.title, onchange: (v) => (form.title = v) })),
+      field('Goal', selectInput({
+        options: GOAL_TEMPLATES.map((t) => ({ value: t, label: t })),
+        value: form.title,
+        onchange: (v) => { form.title = v; render(); },
+      })),
+      form.title === 'Custom goal'
+        ? field('Goal name', textInput({ value: form.customTitle, placeholder: 'What are you saving for?', oninput: (v) => (form.customTitle = v) }))
+        : null,
       field('Target amount', textInput({ type: 'number', min: '0', value: form.targetAmount, oninput: (v) => (form.targetAmount = v) }), errors.targetAmount),
       field('Current amount (optional)', textInput({ type: 'number', min: '0', value: form.currentAmount, oninput: (v) => (form.currentAmount = v) })),
       field('Monthly contribution (optional)', textInput({ type: 'number', min: '0', value: form.monthlyContribution, oninput: (v) => (form.monthlyContribution = v) })),
+      field('Target date (optional)', textInput({ type: 'date', value: form.targetDate, oninput: (v) => (form.targetDate = v) })),
       h('div', { class: 'confirm-dialog-actions' }, [
         button('Cancel', { variant: 'ghost', onClick: () => { showForm = false; render(); } }),
         button('Create Goal', {
           onClick: async () => {
-            const validation = validateGoalInput({ title: form.title, targetAmount: form.targetAmount });
+            const title = form.title === 'Custom goal' ? form.customTitle.trim() : form.title;
+            const validation = validateGoalInput({ title, targetAmount: form.targetAmount, currentAmount: form.currentAmount });
             if (!validation.valid) { errors = validation.errors; render(); return; }
-            await store.addGoal(form);
+            await store.addGoal({ ...form, title });
             showForm = false;
             render();
           },
@@ -69,10 +78,23 @@ export function renderGoalDetail(root, { navigate, id }) {
         progressBar(goal.progress.progressPercent, goal.progress.isComplete ? 'ok' : 'approaching'),
         h('div', { class: 'budget-card-foot' }, [
           h('span', {}, `${formatMoney(goal.progress.remaining, currency)} remaining`),
-          goal.progress.monthsToComplete !== null ? h('span', {}, `Est. completion: ${goal.progress.estimatedCompletionDate} (${goal.progress.monthsToComplete} mo)`) : null,
+          goal.progress.monthsToComplete ? h('span', {}, `Est. completion: ${goal.progress.estimatedCompletionDate} (${goal.progress.monthsToComplete} mo)`) : null,
         ]),
       ]),
+      goal.progress.requiredMonthlyContribution !== null ? h('div', { class: 'card' }, [
+        h('div', { class: 'income-row' }, [
+          h('span', {}, 'To reach it by your target date'),
+          h('span', { class: 'text-strong' }, `${formatMoney(goal.progress.requiredMonthlyContribution, currency)}/mo`),
+        ]),
+        h('div', { class: 'income-row' }, [
+          h('span', { class: 'text-muted' }, goal.progress.monthsRemaining === 0 ? 'Target date is this month' : `${goal.progress.monthsRemaining} months to go`),
+          goal.progress.onTrack
+            ? h('span', { class: 'pill status-ok' }, 'On track')
+            : h('span', { class: 'pill status-approaching' }, 'Contribution below target'),
+        ]),
+      ]) : null,
       field('Monthly contribution', textInput({ type: 'number', min: '0', value: goal.monthlyContribution, oninput: async (v) => { await store.updateGoal(id, { monthlyContribution: Number(v) || 0 }); } })),
+      field('Target date', textInput({ type: 'date', value: goal.targetDate || '', oninput: async (v) => { await store.updateGoal(id, { targetDate: v || null }); } })),
       field('Add contribution now', textInput({ type: 'number', min: '0', value: contribution, oninput: (v) => (contribution = v) })),
       button('Contribute', {
         className: 'btn-block',

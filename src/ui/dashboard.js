@@ -10,16 +10,23 @@ export function renderDashboard(root, { navigate }) {
   const emergencyFund = store.getEmergencyFundStatus();
   const goals = store.getGoalsWithProgress();
   const recentExpenses = [...store.expensesForMonth(monthKey)].sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 5);
-  const monthLabel = new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const monthLabel = new Date().toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  const incomeSources = store.incomeBreakdown(monthKey).filter((s) => s.monthlyAmount > 0);
 
   const content = page(`Hi${store.state.profile.name ? ', ' + store.state.profile.name : ''} 👋`, [
     h('div', { class: 'text-muted month-label' }, monthLabel),
 
     h('div', { class: 'card income-card' }, [
       h('div', { class: 'income-row' }, [
-        h('span', {}, 'Monthly Income'),
+        h('span', {}, 'Income This Month'),
         h('span', { class: 'text-strong' }, formatMoney(snapshot.totalIncome, currency)),
       ]),
+      incomeSources.length > 1
+        ? h('div', { class: 'income-sources' }, incomeSources.map((source) => h('div', { class: 'income-row income-source-row' }, [
+          h('span', { class: 'text-muted small' }, source.label || source.type),
+          h('span', { class: 'text-muted small' }, formatMoney(source.monthlyAmount, currency)),
+        ])))
+        : null,
       h('div', { class: 'income-row' }, [
         h('span', {}, 'Spent So Far'),
         h('span', {}, formatMoney(snapshot.totalSpent, currency)),
@@ -32,7 +39,14 @@ export function renderDashboard(root, { navigate }) {
 
     alerts.length ? h('div', { class: 'alerts-feed' }, alerts.map(alertBanner)) : null,
 
-    h('div', { class: 'section-title' }, 'Budget Groups'),
+    snapshot.totalIncome <= 0
+      ? h('div', { class: 'card' }, [
+        h('div', { class: 'text-strong' }, 'No income set up yet'),
+        h('div', { class: 'text-muted small' }, 'Add an income source in Settings and your budget will be calculated automatically.'),
+      ])
+      : null,
+
+    h('div', { class: 'section-title' }, 'Budget'),
     h('div', { class: 'budget-grid' }, snapshot.groups.map((g) => budgetGroupCard(g, currency, formatMoney))),
 
     h('div', { class: 'section-title' }, 'Emergency Fund'),
