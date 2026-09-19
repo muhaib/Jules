@@ -1,0 +1,17 @@
+{
+  "name": "@ai-crawler-guard/core",
+  "version": "0.1.0",
+  "description": "Transport-agnostic AI crawler detection, reverse-DNS verification, policy and robots.txt generation. No HTTP framework, no I/O beyond DNS and the log shipper.",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./crawlers.json": "./crawlers.json"
+  },
+  "files": ["src", "crawlers.json", "crawlers.schema.json", "README.md"],
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "engines": { "node": ">=18.17.0" },
+  "license": "MIT"
+}

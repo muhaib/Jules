@@ -1,0 +1,373 @@
+{
+  "$schema": "./crawlers.schema.json",
+  "version": "2026-09-19",
+  "notes": [
+    "This file is DATA, not code. Edit it, ship it, or host it and point the",
+    "middleware at it with `catalog.url`. Nothing here is hardcoded in the engine.",
+    "",
+    "`verification.methods` is an ordered list. The engine tries each in order:",
+    "  dns  - reverse DNS on the client IP, then forward-confirm the PTR hostname",
+    "         back to that same IP. Only useful when the operator actually",
+    "         publishes PTR records; a wrong suffix here causes false 'spoofed'.",
+    "  cidr - client IP must fall inside a published prefix list. `ranges` is",
+    "         checked first; `rangesUrl` is only fetched when the middleware is",
+    "         started with `fetchRanges: true` (off by default, no surprise egress).",
+    "A method that says 'not this operator' is a negative; a method that cannot",
+    "answer (no ranges loaded, DNS timeout) is inconclusive. Verified beats",
+    "negative beats inconclusive.",
+    "",
+    "Crawlers with `verification.methods: []` have no published way to verify them.",
+    "They are detected and logged, but their identity claim is never confirmed, so",
+    "they resolve to the `onUnknown` policy action. Do not invent suffixes to make",
+    "that number go down - a false suffix blocks real crawlers.",
+    "",
+    "`robotsOnly: true` means the token is a robots.txt opt-out control, not a",
+    "user-agent string. Google-Extended and Applebot-Extended never appear in a",
+    "User-Agent header; they govern how an already-crawled page may be used. They",
+    "show up in generated robots.txt and in the dashboard toggles, and are never",
+    "matched against request traffic."
+  ],
+  "crawlers": [
+    {
+      "id": "gptbot",
+      "name": "GPTBot",
+      "operator": "OpenAI",
+      "purpose": "training",
+      "robotsToken": "GPTBot",
+      "userAgentPatterns": ["GPTBot"],
+      "docs": "https://platform.openai.com/docs/bots",
+      "verification": {
+        "methods": ["cidr"],
+        "ranges": [],
+        "rangesUrl": "https://openai.com/gptbot.json"
+      }
+    },
+    {
+      "id": "chatgpt-user",
+      "name": "ChatGPT-User",
+      "operator": "OpenAI",
+      "purpose": "user-fetch",
+      "robotsToken": "ChatGPT-User",
+      "userAgentPatterns": ["ChatGPT-User"],
+      "docs": "https://platform.openai.com/docs/bots",
+      "note": "Fetched on behalf of a person who asked ChatGPT about your URL. Blocking this blocks a human's request, not a bulk crawl.",
+      "verification": {
+        "methods": ["cidr"],
+        "ranges": [],
+        "rangesUrl": "https://openai.com/chatgpt-user.json"
+      }
+    },
+    {
+      "id": "oai-searchbot",
+      "name": "OAI-SearchBot",
+      "operator": "OpenAI",
+      "purpose": "search",
+      "robotsToken": "OAI-SearchBot",
+      "userAgentPatterns": ["OAI-SearchBot"],
+      "docs": "https://platform.openai.com/docs/bots",
+      "note": "Builds the ChatGPT search index. Blocking it removes you from those results; it is not a training crawler.",
+      "verification": {
+        "methods": ["cidr"],
+        "ranges": [],
+        "rangesUrl": "https://openai.com/searchbot.json"
+      }
+    },
+    {
+      "id": "claudebot",
+      "name": "ClaudeBot",
+      "operator": "Anthropic",
+      "purpose": "training",
+      "robotsToken": "ClaudeBot",
+      "userAgentPatterns": ["ClaudeBot"],
+      "docs": "https://support.anthropic.com/en/articles/8896518",
+      "verification": {
+        "methods": ["cidr"],
+        "ranges": [],
+        "rangesUrl": "https://www.anthropic.com/ips.json"
+      }
+    },
+    {
+      "id": "claude-user",
+      "name": "Claude-User",
+      "operator": "Anthropic",
+      "purpose": "user-fetch",
+      "robotsToken": "Claude-User",
+      "userAgentPatterns": ["Claude-User"],
+      "docs": "https://support.anthropic.com/en/articles/8896518",
+      "note": "Fetched because a person asked Claude about your page.",
+      "verification": {
+        "methods": ["cidr"],
+        "ranges": [],
+        "rangesUrl": "https://www.anthropic.com/ips.json"
+      }
+    },
+    {
+      "id": "claude-searchbot",
+      "name": "Claude-SearchBot",
+      "operator": "Anthropic",
+      "purpose": "search",
+      "robotsToken": "Claude-SearchBot",
+      "userAgentPatterns": ["Claude-SearchBot"],
+      "docs": "https://support.anthropic.com/en/articles/8896518",
+      "verification": {
+        "methods": ["cidr"],
+        "ranges": [],
+        "rangesUrl": "https://www.anthropic.com/ips.json"
+      }
+    },
+    {
+      "id": "anthropic-ai",
+      "name": "anthropic-ai",
+      "operator": "Anthropic",
+      "purpose": "training",
+      "robotsToken": "anthropic-ai",
+      "userAgentPatterns": ["anthropic-ai"],
+      "deprecated": true,
+      "note": "Retired token kept for robots.txt back-compat and for spotting impersonators still using it.",
+      "verification": { "methods": [] }
+    },
+    {
+      "id": "perplexitybot",
+      "name": "PerplexityBot",
+      "operator": "Perplexity",
+      "purpose": "search",
+      "robotsToken": "PerplexityBot",
+      "userAgentPatterns": ["PerplexityBot"],
+      "docs": "https://docs.perplexity.ai/guides/bots",
+      "verification": {
+        "methods": ["cidr"],
+        "ranges": [],
+        "rangesUrl": "https://www.perplexity.com/perplexitybot.json"
+      }
+    },
+    {
+      "id": "perplexity-user",
+      "name": "Perplexity-User",
+      "operator": "Perplexity",
+      "purpose": "user-fetch",
+      "robotsToken": "Perplexity-User",
+      "userAgentPatterns": ["Perplexity-User"],
+      "docs": "https://docs.perplexity.ai/guides/bots",
+      "verification": {
+        "methods": ["cidr"],
+        "ranges": [],
+        "rangesUrl": "https://www.perplexity.com/perplexity-user.json"
+      }
+    },
+    {
+      "id": "google-extended",
+      "name": "Google-Extended",
+      "operator": "Google",
+      "purpose": "training",
+      "robotsToken": "Google-Extended",
+      "robotsOnly": true,
+      "userAgentPatterns": [],
+      "docs": "https://developers.google.com/search/docs/crawling-indexing/overview-google-crawlers",
+      "note": "Not a crawler and not a user-agent. It is the robots.txt control for whether already-crawled pages may be used to ground and train Gemini. Disallowing it does not remove you from Google Search.",
+      "verification": { "methods": [] }
+    },
+    {
+      "id": "googleother",
+      "name": "GoogleOther",
+      "operator": "Google",
+      "purpose": "other",
+      "robotsToken": "GoogleOther",
+      "userAgentPatterns": ["GoogleOther"],
+      "docs": "https://developers.google.com/search/docs/crawling-indexing/verifying-googlebot",
+      "note": "Generic Google crawler used by internal teams for research and development fetches.",
+      "verification": {
+        "methods": ["dns"],
+        "hostnameSuffixes": [".google.com", ".googlebot.com", ".googleusercontent.com"]
+      }
+    },
+    {
+      "id": "googlebot",
+      "name": "Googlebot",
+      "operator": "Google",
+      "purpose": "search",
+      "robotsToken": "Googlebot",
+      "userAgentPatterns": ["Googlebot"],
+      "docs": "https://developers.google.com/search/docs/crawling-indexing/verifying-googlebot",
+      "note": "Classic search crawler, included so the reverse-DNS check has a well-documented reference case and so you can see it alongside AI traffic. Blocking it removes you from Google Search - it is set to allow and left alone by default.",
+      "defaultAction": "allow",
+      "verification": {
+        "methods": ["dns"],
+        "hostnameSuffixes": [".googlebot.com", ".google.com"]
+      }
+    },
+    {
+      "id": "applebot",
+      "name": "Applebot",
+      "operator": "Apple",
+      "purpose": "search",
+      "robotsToken": "Applebot",
+      "userAgentPatterns": ["Applebot"],
+      "docs": "https://support.apple.com/en-us/119829",
+      "verification": {
+        "methods": ["dns"],
+        "hostnameSuffixes": [".applebot.apple.com"]
+      }
+    },
+    {
+      "id": "applebot-extended",
+      "name": "Applebot-Extended",
+      "operator": "Apple",
+      "purpose": "training",
+      "robotsToken": "Applebot-Extended",
+      "robotsOnly": true,
+      "userAgentPatterns": [],
+      "docs": "https://support.apple.com/en-us/119829",
+      "note": "robots.txt-only control over whether Applebot's existing crawl may train Apple foundation models.",
+      "verification": { "methods": [] }
+    },
+    {
+      "id": "amazonbot",
+      "name": "Amazonbot",
+      "operator": "Amazon",
+      "purpose": "other",
+      "robotsToken": "Amazonbot",
+      "userAgentPatterns": ["Amazonbot"],
+      "docs": "https://developer.amazon.com/amazonbot",
+      "verification": {
+        "methods": ["dns"],
+        "hostnameSuffixes": [".crawl.amazon.com"]
+      }
+    },
+    {
+      "id": "bytespider",
+      "name": "Bytespider",
+      "operator": "ByteDance",
+      "purpose": "training",
+      "robotsToken": "Bytespider",
+      "userAgentPatterns": ["Bytespider", "ByteSpider"],
+      "note": "Widely reported to ignore robots.txt, so the robots directive alone is not enough - enforce this one in the middleware. No operator-published verification method is known; treat identity as unconfirmed.",
+      "verification": { "methods": [] }
+    },
+    {
+      "id": "ccbot",
+      "name": "CCBot",
+      "operator": "Common Crawl",
+      "purpose": "training",
+      "robotsToken": "CCBot",
+      "userAgentPatterns": ["CCBot"],
+      "docs": "https://commoncrawl.org/ccbot",
+      "note": "Common Crawl's archive is a primary training corpus for many models, so this one crawl feeds many downstream consumers.",
+      "verification": { "methods": [] }
+    },
+    {
+      "id": "meta-externalagent",
+      "name": "meta-externalagent",
+      "operator": "Meta",
+      "purpose": "training",
+      "robotsToken": "meta-externalagent",
+      "userAgentPatterns": ["meta-externalagent", "FacebookBot"],
+      "docs": "https://developers.facebook.com/docs/sharing/webmasters/web-crawlers",
+      "verification": { "methods": [] }
+    },
+    {
+      "id": "meta-externalfetcher",
+      "name": "meta-externalfetcher",
+      "operator": "Meta",
+      "purpose": "user-fetch",
+      "robotsToken": "meta-externalfetcher",
+      "userAgentPatterns": ["meta-externalfetcher"],
+      "docs": "https://developers.facebook.com/docs/sharing/webmasters/web-crawlers",
+      "verification": { "methods": [] }
+    },
+    {
+      "id": "cohere-ai",
+      "name": "cohere-ai",
+      "operator": "Cohere",
+      "purpose": "training",
+      "robotsToken": "cohere-ai",
+      "userAgentPatterns": ["cohere-ai", "cohere-training-data-crawler"],
+      "verification": { "methods": [] }
+    },
+    {
+      "id": "mistralai-user",
+      "name": "MistralAI-User",
+      "operator": "Mistral AI",
+      "purpose": "user-fetch",
+      "robotsToken": "MistralAI-User",
+      "userAgentPatterns": ["MistralAI-User"],
+      "verification": { "methods": [] }
+    },
+    {
+      "id": "diffbot",
+      "name": "Diffbot",
+      "operator": "Diffbot",
+      "purpose": "training",
+      "robotsToken": "Diffbot",
+      "userAgentPatterns": ["Diffbot"],
+      "verification": { "methods": [] }
+    },
+    {
+      "id": "omgilibot",
+      "name": "omgilibot",
+      "operator": "Webz.io",
+      "purpose": "training",
+      "robotsToken": "omgilibot",
+      "userAgentPatterns": ["omgilibot", "omgili"],
+      "note": "Webz.io resells crawled web data as training corpora.",
+      "verification": { "methods": [] }
+    },
+    {
+      "id": "ai2bot",
+      "name": "AI2Bot",
+      "operator": "Allen Institute for AI",
+      "purpose": "training",
+      "robotsToken": "AI2Bot",
+      "userAgentPatterns": ["AI2Bot", "Ai2Bot-Dolma"],
+      "verification": { "methods": [] }
+    },
+    {
+      "id": "youbot",
+      "name": "YouBot",
+      "operator": "You.com",
+      "purpose": "search",
+      "robotsToken": "YouBot",
+      "userAgentPatterns": ["YouBot"],
+      "verification": { "methods": [] }
+    },
+    {
+      "id": "imagesiftbot",
+      "name": "ImagesiftBot",
+      "operator": "Hive / ImageSift",
+      "purpose": "training",
+      "robotsToken": "ImagesiftBot",
+      "userAgentPatterns": ["ImagesiftBot"],
+      "note": "Image-focused crawler; relevant if your value is photography or artwork.",
+      "verification": { "methods": [] }
+    },
+    {
+      "id": "timpibot",
+      "name": "Timpibot",
+      "operator": "Timpi",
+      "purpose": "training",
+      "robotsToken": "Timpibot",
+      "userAgentPatterns": ["Timpibot"],
+      "verification": { "methods": [] }
+    },
+    {
+      "id": "duckassistbot",
+      "name": "DuckAssistBot",
+      "operator": "DuckDuckGo",
+      "purpose": "user-fetch",
+      "robotsToken": "DuckAssistBot",
+      "userAgentPatterns": ["DuckAssistBot"],
+      "verification": { "methods": [] }
+    },
+    {
+      "id": "petalbot",
+      "name": "PetalBot",
+      "operator": "Huawei",
+      "purpose": "search",
+      "robotsToken": "PetalBot",
+      "userAgentPatterns": ["PetalBot"],
+      "verification": {
+        "methods": ["dns"],
+        "hostnameSuffixes": [".petalsearch.com", ".aspiegel.com"]
+      }
+    }
+  ]
+}

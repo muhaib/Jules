@@ -1,0 +1,12 @@
+{
+  "name": "@ai-crawler-guard/example-express-site",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A small site with the middleware mounted, to try the whole flow locally.",
+  "scripts": { "start": "node server.js" },
+  "dependencies": {
+    "ai-crawler-guard": "0.1.0",
+    "express": "^4.19.2"
+  }
+}

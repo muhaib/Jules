@@ -1,0 +1,7 @@
+# The site's own rules. The middleware merges its managed block into this
+# file rather than replacing it.
+User-agent: *
+Disallow: /admin/
+Crawl-delay: 1
+
+Sitemap: http://localhost:8080/sitemap.xml

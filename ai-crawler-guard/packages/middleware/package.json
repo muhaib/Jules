@@ -1,0 +1,42 @@
+{
+  "name": "ai-crawler-guard",
+  "version": "0.1.0",
+  "description": "Detect, verify, log and selectively block or licence AI crawlers. Express, Fastify, Next.js and plain node:http adapters over one framework-agnostic core.",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./express": "./src/express.js",
+    "./fastify": "./src/fastify.js",
+    "./next": "./src/next.js",
+    "./node": "./src/node.js"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "keywords": [
+    "ai",
+    "crawler",
+    "bot",
+    "gptbot",
+    "claudebot",
+    "robots.txt",
+    "middleware",
+    "licensing"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@ai-crawler-guard/core": "0.1.0"
+  },
+  "engines": {
+    "node": ">=18.17.0"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "express": "^4.22.3",
+    "fastify": "^5.12.5"
+  }
+}

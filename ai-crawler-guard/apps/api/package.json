@@ -1,0 +1,29 @@
+{
+  "name": "@ai-crawler-guard/api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Aggregation API: ingests bot-hit events from the middleware, stores policy, serves the dashboard.",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "migrate": "node src/migrate.js",
+    "seed": "node src/seed.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@ai-crawler-guard/core": "0.1.0",
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.6",
+    "dotenv": "^16.4.5",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.2",
+    "nodemailer": "^6.9.14",
+    "pg": "^8.12.0"
+  },
+  "engines": {
+    "node": ">=18.17.0"
+  },
+  "license": "MIT"
+}

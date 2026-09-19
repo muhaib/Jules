@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/muhaib/jules/ai-crawler-guard/crawlers.schema.json",
+  "title": "AI crawler signature catalog",
+  "description": "The signature list the middleware matches traffic against. Edit this file, host it, or point `catalog.source` at your own copy.",
+  "type": "object",
+  "required": ["crawlers"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": {
+      "type": "string",
+      "description": "Shown in the dashboard and in generated robots.txt, so you can tell which list a site is running."
+    },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Free-text notes for whoever maintains the file. Ignored by the engine."
+    },
+    "crawlers": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/crawler" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "action": { "enum": ["allow", "log", "license", "block"] },
+    "crawler": {
+      "type": "object",
+      "required": ["id", "robotsToken"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "description": "Stable slug. Policy rules and stored events reference it, so renaming one orphans its history."
+        },
+        "name": { "type": "string", "description": "Display name. Defaults to robotsToken." },
+        "operator": { "type": "string" },
+        "purpose": {
+          "enum": ["training", "search", "user-fetch", "other"],
+          "description": "Groups the crawler in the dashboard and tells the owner what blocking it would cost them."
+        },
+        "robotsToken": {
+          "type": "string",
+          "pattern": "^[^\\s#]+$",
+          "description": "The token written to robots.txt. Must be unique case-insensitively across the file."
+        },
+        "robotsOnly": {
+          "type": "boolean",
+          "description": "True for opt-out controls that only exist in robots.txt and never appear in a User-Agent header (Google-Extended, Applebot-Extended). Such entries must not declare userAgentPatterns."
+        },
+        "userAgentPatterns": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "A case-insensitive substring, or `re:<pattern>` for a regular expression. The longest matching pattern wins across the whole catalog."
+          }
+        },
+        "defaultAction": {
+          "$ref": "#/$defs/action",
+          "description": "What this crawler gets when the site owner has expressed no opinion. Use sparingly - it overrides the site's own default."
+        },
+        "deprecated": { "type": "boolean" },
+        "docs": { "type": "string", "format": "uri" },
+        "note": { "type": "string", "description": "Shown to the site owner beside the toggle." },
+        "verification": { "$ref": "#/$defs/verification" }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "methods": {
+          "type": "array",
+          "items": { "enum": ["dns", "cidr"] },
+          "description": "Tried in order. An empty array means the operator publishes no way to verify this crawler; do not invent one, because a wrong suffix blocks real crawlers."
+        },
+        "hostnameSuffixes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Required by the `dns` method. Matched at a label boundary, so \".openai.com\" never matches \"notopenai.com\"."
+        },
+        "ranges": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Static CIDR prefixes, always checked by the `cidr` method."
+        },
+        "rangesUrl": {
+          "type": "string",
+          "format": "uri",
+          "description": "An operator-published prefix list. Only fetched when the middleware runs with verification.fetchRanges = true."
+        }
+      }
+    }
+  }
+}

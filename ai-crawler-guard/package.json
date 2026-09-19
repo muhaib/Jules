@@ -1,0 +1,26 @@
+{
+  "name": "ai-crawler-guard-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AI crawler detection middleware, aggregation API and analytics dashboard.",
+  "type": "module",
+  "workspaces": [
+    "packages/core",
+    "packages/middleware",
+    "apps/api",
+    "examples/express-site",
+    "examples/reverse-proxy"
+  ],
+  "scripts": {
+    "test": "npm run test --workspaces --if-present",
+    "test:core": "npm test -w @ai-crawler-guard/core",
+    "test:middleware": "npm test -w ai-crawler-guard",
+    "test:api": "npm test -w @ai-crawler-guard/api",
+    "migrate": "npm run migrate -w @ai-crawler-guard/api",
+    "seed": "npm run seed -w @ai-crawler-guard/api",
+    "dev:api": "npm run dev -w @ai-crawler-guard/api",
+    "dev:dashboard": "npm run dev --prefix apps/dashboard"
+  },
+  "engines": { "node": ">=18.17.0" },
+  "license": "MIT"
+}

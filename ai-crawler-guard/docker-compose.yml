@@ -1,0 +1,59 @@
+# Local stack: Postgres, the aggregation API, the dashboard, and a demo site
+# with the middleware mounted.
+#
+#   cp .env.example .env   # set SESSION_SECRET
+#   docker compose up --build
+#   docker compose exec api npm run seed -w @ai-crawler-guard/api
+#
+# Then open http://localhost:3000 and sign in with the credentials the seed
+# prints.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: aicg
+      POSTGRES_PASSWORD: aicg
+      POSTGRES_DB: aicg
+    ports: ['5432:5432']
+    volumes: ['pgdata:/var/lib/postgresql/data']
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U aicg']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      DATABASE_URL: postgres://aicg:aicg@db:5432/aicg
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env - openssl rand -hex 32}
+      PORT: '4000'
+      DASHBOARD_URL: http://localhost:3000
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
+      MIGRATE_ON_BOOT: 'true'
+      # Optional: uncomment to have inquiries emailed as well as stored.
+      # SMTP_HOST: ${SMTP_HOST}
+      # SMTP_PORT: ${SMTP_PORT}
+      # SMTP_USER: ${SMTP_USER}
+      # SMTP_PASSWORD: ${SMTP_PASSWORD}
+      # MAIL_FROM: ${MAIL_FROM}
+    ports: ['4000:4000']
+    depends_on:
+      db: { condition: service_healthy }
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: apps/dashboard/Dockerfile
+      args:
+        API_URL: http://api:4000
+    environment:
+      API_URL: http://api:4000
+    ports: ['3000:3000']
+    depends_on: [api]
+
+volumes:
+  pgdata:
