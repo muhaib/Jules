@@ -199,3 +199,86 @@ test('suspended restaurant cannot log in', async () => {
   });
   assert.equal(loginRes.status, 403);
 });
+
+test('size modifiers: order uses the chosen size price, not the base price', async () => {
+  const { token } = await login('admin@test.local', 'test-password');
+  const created = await (await fetch(`${BASE}/api/admin/restaurants`, {
+    method: 'POST', headers: authed(token),
+    body: JSON.stringify({ name: 'Sizes Cafe', owner_name: 'Owner', owner_email: 'owner@sizescafe.local' }),
+  })).json();
+  const { token: ownerToken } = await login('owner@sizescafe.local', created.owner_login.temporary_password);
+
+  const itemRes = await fetch(`${BASE}/api/menu/items`, {
+    method: 'POST', headers: authed(ownerToken), body: JSON.stringify({ name: 'Coffee', price: 3 }),
+  });
+  const { item } = await itemRes.json();
+  assert.deepEqual(item.sizes, []);
+
+  const sizeRes = await fetch(`${BASE}/api/menu/items/${item.id}/sizes`, {
+    method: 'POST', headers: authed(ownerToken), body: JSON.stringify({ name: 'Large', price: 5 }),
+  });
+  assert.equal(sizeRes.status, 201);
+  const { size } = await sizeRes.json();
+
+  const itemsAfter = await (await fetch(`${BASE}/api/menu/items`, { headers: authed(ownerToken) })).json();
+  assert.equal(itemsAfter.items.find((i) => i.id === item.id).sizes.length, 1);
+
+  const orderRes = await fetch(`${BASE}/api/orders`, {
+    method: 'POST', headers: authed(ownerToken),
+    body: JSON.stringify({ items: [{ menu_item_id: item.id, size_id: size.id, qty: 2 }] }),
+  });
+  assert.equal(orderRes.status, 201);
+  const { order } = await orderRes.json();
+  assert.equal(order.total, 10);
+  assert.equal(order.items[0].name_snapshot, 'Coffee (Large)');
+  assert.equal(order.items[0].price_snapshot, 5);
+
+  const badOrder = await fetch(`${BASE}/api/orders`, {
+    method: 'POST', headers: authed(ownerToken),
+    body: JSON.stringify({ items: [{ menu_item_id: item.id, size_id: 999999, qty: 1 }] }),
+  });
+  assert.equal(badOrder.status, 400);
+
+  const delRes = await fetch(`${BASE}/api/menu/items/${item.id}/sizes/${size.id}`, { method: 'DELETE', headers: authed(ownerToken) });
+  assert.equal(delRes.status, 204);
+});
+
+test('menu image upload: stores the file and PATCHes onto the item', async () => {
+  const { token } = await login('admin@test.local', 'test-password');
+  const created = await (await fetch(`${BASE}/api/admin/restaurants`, {
+    method: 'POST', headers: authed(token),
+    body: JSON.stringify({ name: 'Photo Diner', owner_name: 'Owner', owner_email: 'owner@photodiner.local' }),
+  })).json();
+  const { token: ownerToken } = await login('owner@photodiner.local', created.owner_login.temporary_password);
+
+  const itemRes = await fetch(`${BASE}/api/menu/items`, {
+    method: 'POST', headers: authed(ownerToken), body: JSON.stringify({ name: 'Waffle', price: 6 }),
+  });
+  const { item } = await itemRes.json();
+
+  const pngBytes = Buffer.from(
+    '89504e470d0a1a0a0000000d4948445200000001000000010802000000907753de0000000a4944415478da6360000002000155a2415a0000000049454e44ae426082',
+    'hex'
+  );
+  const form = new FormData();
+  form.append('image', new Blob([pngBytes], { type: 'image/png' }), 'waffle.png');
+
+  const uploadRes = await fetch(`${BASE}/api/menu/images`, { method: 'POST', headers: { Authorization: `Bearer ${ownerToken}` }, body: form });
+  assert.equal(uploadRes.status, 201);
+  const { url } = await uploadRes.json();
+  assert.match(url, /^\/uploads\/\d+\/[\w-]+\.png$/);
+
+  const fileRes = await fetch(`${BASE}${url}`);
+  assert.equal(fileRes.status, 200);
+
+  const patchRes = await fetch(`${BASE}/api/menu/items/${item.id}`, {
+    method: 'PATCH', headers: authed(ownerToken), body: JSON.stringify({ image_url: url }),
+  });
+  const { item: patched } = await patchRes.json();
+  assert.equal(patched.image_url, url);
+
+  const badForm = new FormData();
+  badForm.append('image', new Blob(['not an image'], { type: 'text/plain' }), 'notes.txt');
+  const badUpload = await fetch(`${BASE}/api/menu/images`, { method: 'POST', headers: { Authorization: `Bearer ${ownerToken}` }, body: badForm });
+  assert.equal(badUpload.status, 400);
+});

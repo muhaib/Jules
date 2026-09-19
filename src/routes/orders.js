@@ -9,6 +9,21 @@ router.use(requireAuth, scopeTenant);
 const ORDER_STATUSES = ['open', 'preparing', 'ready', 'served', 'billed', 'paid', 'cancelled'];
 const ITEM_STATUSES = ['pending', 'preparing', 'ready', 'served', 'cancelled'];
 
+// Resolves a cart line to its authoritative name/price server-side — the
+// client only sends menu_item_id (+ optional size_id) and quantity, never a
+// price, so a tampered request can't under-charge an order.
+function resolveLine(line, restaurantId) {
+  const menuItem = db.prepare('SELECT * FROM menu_items WHERE id = ? AND restaurant_id = ?').get(line.menu_item_id, restaurantId);
+  if (!menuItem) return null;
+
+  if (line.size_id) {
+    const size = db.prepare('SELECT * FROM menu_item_sizes WHERE id = ? AND menu_item_id = ?').get(line.size_id, menuItem.id);
+    if (!size) return null;
+    return { menuItemId: menuItem.id, name: `${menuItem.name} (${size.name})`, price: size.price };
+  }
+  return { menuItemId: menuItem.id, name: menuItem.name, price: menuItem.price };
+}
+
 function loadOrder(id, restaurantId) {
   const order = db.prepare('SELECT * FROM orders WHERE id = ? AND restaurant_id = ?').get(id, restaurantId);
   if (!order) return null;
@@ -52,17 +67,10 @@ router.post('/', (req, res) => {
     return res.status(400).json({ error: 'At least one item is required' });
   }
 
-  const menuItemIds = items.map((i) => i.menu_item_id);
-  const placeholders = menuItemIds.map(() => '?').join(',');
-  const menuItems = db
-    .prepare(`SELECT * FROM menu_items WHERE restaurant_id = ? AND id IN (${placeholders})`)
-    .all(req.restaurantId, ...menuItemIds);
-  const menuById = new Map(menuItems.map((m) => [m.id, m]));
-
-  for (const line of items) {
-    if (!menuById.has(line.menu_item_id)) {
-      return res.status(400).json({ error: `Menu item ${line.menu_item_id} not found for this restaurant` });
-    }
+  const resolved = items.map((line) => resolveLine(line, req.restaurantId));
+  const badIndex = resolved.findIndex((r) => !r);
+  if (badIndex !== -1) {
+    return res.status(400).json({ error: `Menu item ${items[badIndex].menu_item_id} (or its size) was not found for this restaurant` });
   }
 
   const result = db.transaction(() => {
@@ -78,10 +86,10 @@ router.post('/', (req, res) => {
       `INSERT INTO order_items (order_id, menu_item_id, name_snapshot, price_snapshot, qty, notes, status)
        VALUES (?, ?, ?, ?, ?, ?, 'pending')`
     );
-    for (const line of items) {
-      const menuItem = menuById.get(line.menu_item_id);
-      insertItem.run(orderId, menuItem.id, menuItem.name, menuItem.price, line.qty || 1, line.notes || null);
-    }
+    items.forEach((line, i) => {
+      const r = resolved[i];
+      insertItem.run(orderId, r.menuItemId, r.name, r.price, line.qty || 1, line.notes || null);
+    });
 
     if (table_id) {
       db.prepare("UPDATE dining_tables SET status = 'occupied' WHERE id = ? AND restaurant_id = ?").run(table_id, req.restaurantId);
@@ -111,9 +119,9 @@ router.post('/:id/items', (req, res) => {
   );
   const tx = db.transaction(() => {
     for (const line of items) {
-      const menuItem = db.prepare('SELECT * FROM menu_items WHERE id = ? AND restaurant_id = ?').get(line.menu_item_id, req.restaurantId);
-      if (!menuItem) throw new Error('bad_item');
-      insertItem.run(order.id, menuItem.id, menuItem.name, menuItem.price, line.qty || 1, line.notes || null);
+      const r = resolveLine(line, req.restaurantId);
+      if (!r) throw new Error('bad_item');
+      insertItem.run(order.id, r.menuItemId, r.name, r.price, line.qty || 1, line.notes || null);
     }
     db.prepare("UPDATE orders SET status = 'open', updated_at = datetime('now') WHERE id = ?").run(order.id);
   });

@@ -16,7 +16,9 @@ sync for each one.
   - **Kitchen display (KDS)** — real-time pending → preparing → ready → served
     board for the kitchen
   - **Tables** — free / occupied / reserved status
-  - **Menu** — categories and items, pricing, availability toggle
+  - **Menu** — categories and items, pricing, descriptions, availability
+    toggle, uploaded photos, and size modifiers (e.g. Small/Medium/Large,
+    each with its own price — the POS asks which one when an item has any)
   - **Staff** — manager/cashier/waiter/kitchen accounts for that restaurant
   - **Reports** — daily sales, top items, revenue by payment method
 - **Real-time sync** via Socket.IO: an order placed on one device shows up

@@ -101,24 +101,41 @@ function renderPosItems(items) {
     const cat = state.categories.find((c) => c.id === catId);
     html += `<h4 class="muted">${cat ? escapeHtml(cat.name) : 'Other'}</h4>`;
     for (const item of catItems) {
-      html += `<button class="item-btn secondary" onclick="addToCart(${item.id})">${escapeHtml(item.name)}<span class="price">${fmtMoney(item.price, state.restaurant?.currency)}</span></button>`;
+      const hasSizes = item.sizes && item.sizes.length;
+      const priceLabel = hasSizes ? `from ${fmtMoney(Math.min(...item.sizes.map((s) => s.price)), state.restaurant?.currency)}` : fmtMoney(item.price, state.restaurant?.currency);
+      html += `<button class="item-btn secondary" onclick="addToCart(${item.id})">${escapeHtml(item.name)}<span class="price">${priceLabel}</span></button>`;
     }
   }
   document.getElementById('pos-items').innerHTML = html || '<p class="muted">No menu items yet. Add some in the Menu tab.</p>';
 }
 
-function addToCart(itemId) {
+function addToCart(itemId, sizeId) {
   const item = state.items.find((i) => i.id === itemId);
-  const line = state.cart.find((l) => l.menu_item_id === itemId);
+  if (!sizeId && item.sizes && item.sizes.length) {
+    openSizeChooser(item);
+    return;
+  }
+  const size = sizeId ? item.sizes.find((s) => s.id === sizeId) : null;
+  const key = `${itemId}:${sizeId || 'base'}`;
+  const line = state.cart.find((l) => l.key === key);
   if (line) line.qty += 1;
-  else state.cart.push({ menu_item_id: itemId, name: item.name, price: item.price, qty: 1 });
+  else {
+    state.cart.push({
+      key,
+      menu_item_id: itemId,
+      size_id: sizeId || null,
+      name: size ? `${item.name} (${size.name})` : item.name,
+      price: size ? size.price : item.price,
+      qty: 1,
+    });
+  }
   renderCart();
 }
-function changeQty(itemId, delta) {
-  const line = state.cart.find((l) => l.menu_item_id === itemId);
+function changeQty(key, delta) {
+  const line = state.cart.find((l) => l.key === key);
   if (!line) return;
   line.qty += delta;
-  if (line.qty <= 0) state.cart = state.cart.filter((l) => l.menu_item_id !== itemId);
+  if (line.qty <= 0) state.cart = state.cart.filter((l) => l.key !== key);
   renderCart();
 }
 function renderCart() {
@@ -127,13 +144,24 @@ function renderCart() {
     <div class="cart-line">
       <span>${escapeHtml(l.name)}</span>
       <span class="row">
-        <button class="small secondary" onclick="changeQty(${l.menu_item_id}, -1)">-</button>
+        <button class="small secondary" onclick="changeQty('${l.key}', -1)">-</button>
         ${l.qty}
-        <button class="small secondary" onclick="changeQty(${l.menu_item_id}, 1)">+</button>
+        <button class="small secondary" onclick="changeQty('${l.key}', 1)">+</button>
       </span>
     </div>`).join('') || '<p class="muted">Cart is empty</p>';
   const total = state.cart.reduce((s, l) => s + l.price * l.qty, 0);
   document.getElementById('pos-total').textContent = fmtMoney(total, state.restaurant?.currency);
+}
+
+function openSizeChooser(item) {
+  document.getElementById('size-modal-title').textContent = `${item.name} — choose a size`;
+  document.getElementById('size-modal-options').innerHTML = item.sizes
+    .map((s) => `<button class="secondary" style="text-align:left;" onclick="addToCart(${item.id}, ${s.id}); closeSizeModal();">${escapeHtml(s.name)}<span class="price">${fmtMoney(s.price, state.restaurant?.currency)}</span></button>`)
+    .join('');
+  document.getElementById('size-modal').style.display = 'flex';
+}
+function closeSizeModal() {
+  document.getElementById('size-modal').style.display = 'none';
 }
 
 async function submitOrder() {
@@ -147,7 +175,7 @@ async function submitOrder() {
         table_id: document.getElementById('pos-table').value || null,
         order_type: document.getElementById('pos-type').value,
         customer_name: document.getElementById('pos-customer').value.trim() || null,
-        items: state.cart.map((l) => ({ menu_item_id: l.menu_item_id, qty: l.qty })),
+        items: state.cart.map((l) => ({ menu_item_id: l.menu_item_id, size_id: l.size_id, qty: l.qty })),
       },
     });
     toast('Order sent to kitchen');
@@ -290,8 +318,10 @@ async function renderMenu() {
         <input id="new-item-price" type="number" step="0.01" placeholder="Price" style="flex:1;" />
         <button onclick="addItem()">Add</button>
       </div>
+      <div class="field" style="margin-top:8px;margin-bottom:0;"><input id="new-item-description" placeholder="Description (optional)" /></div>
+      <p class="muted" style="font-size:12px;margin:8px 0 0;">Add a photo or size modifiers (Small/Medium/Large) after creating the item, via Edit.</p>
     </div>
-    <div class="card"><table><thead><tr><th>Item</th><th>Category</th><th>Price</th><th>Available</th><th></th></tr></thead><tbody id="menu-table"></tbody></table></div>`;
+    <div class="card"><table><thead><tr><th></th><th>Item</th><th>Category</th><th>Price</th><th>Available</th><th></th></tr></thead><tbody id="menu-table"></tbody></table></div>`;
 
   const [{ categories }, { items }] = await Promise.all([api('/api/menu/categories'), api('/api/menu/items')]);
   state.categories = categories; state.items = items;
@@ -300,17 +330,20 @@ async function renderMenu() {
 
   document.getElementById('menu-table').innerHTML = items.map((i) => {
     const cat = categories.find((c) => c.id === i.category_id);
+    const priceLabel = i.sizes && i.sizes.length ? `${i.sizes.length} sizes` : fmtMoney(i.price, state.restaurant?.currency);
     return `<tr>
+      <td>${i.image_url ? `<img src="${escapeHtml(i.image_url)}" style="width:36px;height:36px;object-fit:cover;border-radius:6px;" />` : ''}</td>
       <td>${escapeHtml(i.name)}</td>
       <td class="muted">${cat ? escapeHtml(cat.name) : '—'}</td>
-      <td>${fmtMoney(i.price, state.restaurant?.currency)}</td>
+      <td>${priceLabel}</td>
       <td><span class="badge status-${i.is_available ? 'active' : 'disabled'}">${i.is_available ? 'Yes' : 'No'}</span></td>
       <td class="row">
+        <button class="small secondary" onclick="openItemModal(${i.id})">Edit</button>
         <button class="small secondary" onclick="toggleItemAvailable(${i.id}, ${i.is_available ? 0 : 1})">${i.is_available ? 'Hide' : 'Show'}</button>
         <button class="small danger" onclick="deleteItem(${i.id})">Delete</button>
       </td>
     </tr>`;
-  }).join('') || '<tr><td colspan="5" class="muted">No items yet.</td></tr>';
+  }).join('') || '<tr><td colspan="6" class="muted">No items yet.</td></tr>';
 }
 async function addCategory() {
   const name = document.getElementById('new-cat-name').value.trim();
@@ -322,9 +355,112 @@ async function addItem() {
   const category_id = document.getElementById('new-item-category').value || null;
   const name = document.getElementById('new-item-name').value.trim();
   const price = Number(document.getElementById('new-item-price').value);
+  const description = document.getElementById('new-item-description').value.trim();
   if (!name || !price) return;
-  await api('/api/menu/items', { method: 'POST', body: { category_id, name, price } });
+  await api('/api/menu/items', { method: 'POST', body: { category_id, name, price, description: description || null } });
   renderMenu();
+}
+
+// ---------- Menu item edit modal: description, photo upload, size modifiers ----------
+let editingItem = null;
+
+function openItemModal(itemId) {
+  editingItem = state.items.find((i) => i.id === itemId);
+  if (!editingItem) return;
+
+  document.getElementById('im-error').style.display = 'none';
+  document.getElementById('im-photo-error').style.display = 'none';
+  document.getElementById('im-name').value = editingItem.name;
+  document.getElementById('im-price').value = editingItem.price;
+  document.getElementById('im-description').value = editingItem.description || '';
+  document.getElementById('im-available').checked = !!editingItem.is_available;
+  document.getElementById('im-photo-input').value = '';
+
+  const categorySelect = document.getElementById('im-category');
+  categorySelect.innerHTML = '<option value="">No category</option>' + state.categories.map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+  categorySelect.value = editingItem.category_id || '';
+
+  const preview = document.getElementById('im-photo-preview');
+  if (editingItem.image_url) { preview.src = editingItem.image_url; preview.style.display = 'block'; }
+  else preview.style.display = 'none';
+
+  renderSizesList();
+  document.getElementById('item-modal').style.display = 'flex';
+}
+function closeItemModal() {
+  document.getElementById('item-modal').style.display = 'none';
+  editingItem = null;
+}
+
+function renderSizesList() {
+  document.getElementById('im-sizes-list').innerHTML = (editingItem.sizes || []).map((s) => `
+    <div class="cart-line">
+      <span>${escapeHtml(s.name)}</span>
+      <span class="row">${fmtMoney(s.price, state.restaurant?.currency)}<button type="button" class="small danger" onclick="deleteSize(${s.id})">Remove</button></span>
+    </div>`).join('') || '<p class="muted" style="font-size:12px;">No size modifiers — the base price is used as-is.</p>';
+}
+
+async function addSize() {
+  const name = document.getElementById('im-size-name').value.trim();
+  const price = Number(document.getElementById('im-size-price').value);
+  if (!name || !price) return;
+  const { size } = await api(`/api/menu/items/${editingItem.id}/sizes`, { method: 'POST', body: { name, price } });
+  editingItem.sizes = [...(editingItem.sizes || []), size];
+  document.getElementById('im-size-name').value = '';
+  document.getElementById('im-size-price').value = '';
+  renderSizesList();
+}
+async function deleteSize(sizeId) {
+  await api(`/api/menu/items/${editingItem.id}/sizes/${sizeId}`, { method: 'DELETE' });
+  editingItem.sizes = editingItem.sizes.filter((s) => s.id !== sizeId);
+  renderSizesList();
+}
+
+document.addEventListener('change', async (e) => {
+  if (e.target.id !== 'im-photo-input' || !editingItem) return;
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const errorEl = document.getElementById('im-photo-error');
+  errorEl.style.display = 'none';
+  try {
+    const form = new FormData();
+    form.append('image', file);
+    const res = await fetch('/api/menu/images', { method: 'POST', headers: { Authorization: `Bearer ${Auth.token}` }, body: form });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Upload failed');
+
+    await api(`/api/menu/items/${editingItem.id}`, { method: 'PATCH', body: { image_url: data.url } });
+    editingItem.image_url = data.url;
+    const preview = document.getElementById('im-photo-preview');
+    preview.src = data.url;
+    preview.style.display = 'block';
+  } catch (err) {
+    errorEl.textContent = err.message;
+    errorEl.style.display = 'block';
+  }
+});
+
+async function saveItemModal() {
+  const errorEl = document.getElementById('im-error');
+  errorEl.style.display = 'none';
+  try {
+    await api(`/api/menu/items/${editingItem.id}`, {
+      method: 'PATCH',
+      body: {
+        name: document.getElementById('im-name').value.trim(),
+        category_id: document.getElementById('im-category').value || null,
+        price: Number(document.getElementById('im-price').value),
+        description: document.getElementById('im-description').value.trim() || null,
+        is_available: document.getElementById('im-available').checked,
+      },
+    });
+    closeItemModal();
+    renderMenu();
+  } catch (err) {
+    errorEl.textContent = err.message;
+    errorEl.style.display = 'block';
+  }
 }
 async function toggleItemAvailable(id, isAvailable) {
   await api(`/api/menu/items/${id}`, { method: 'PATCH', body: { is_available: !!isAvailable } });

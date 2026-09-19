@@ -55,6 +55,14 @@ CREATE TABLE IF NOT EXISTS menu_items (
   image_url TEXT
 );
 
+CREATE TABLE IF NOT EXISTS menu_item_sizes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  menu_item_id INTEGER NOT NULL REFERENCES menu_items(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  price REAL NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS dining_tables (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   restaurant_id INTEGER NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
@@ -98,6 +106,7 @@ CREATE TABLE IF NOT EXISTS payments (
 
 CREATE INDEX IF NOT EXISTS idx_users_restaurant ON users(restaurant_id);
 CREATE INDEX IF NOT EXISTS idx_menu_items_restaurant ON menu_items(restaurant_id);
+CREATE INDEX IF NOT EXISTS idx_item_sizes_item ON menu_item_sizes(menu_item_id);
 CREATE INDEX IF NOT EXISTS idx_tables_restaurant ON dining_tables(restaurant_id);
 CREATE INDEX IF NOT EXISTS idx_orders_restaurant ON orders(restaurant_id);
 CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);

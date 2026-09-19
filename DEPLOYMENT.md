@@ -107,12 +107,14 @@ pm2 restart restaurant-pos
 
 ## Backups
 
-The entire platform's data lives in one SQLite file (`data/pos.db` by
-default) plus its WAL sidecar files. Back it up on a cron schedule:
+Platform data lives in two places: the SQLite file (`data/pos.db` by
+default, plus its WAL sidecar files) and uploaded menu-item photos
+(`public/uploads/`). Back up both on a cron schedule:
 
 ```bash
 # /etc/cron.d/restaurant-pos-backup
 0 3 * * * root sqlite3 /var/www/restaurant-pos/data/pos.db ".backup /var/backups/pos-$(date +\%F).db"
+0 3 * * * root tar -czf /var/backups/pos-uploads-$(date +\%F).tar.gz -C /var/www/restaurant-pos public/uploads
 ```
 
 Prune old backups periodically or ship them off-server (Hostinger's object
