@@ -1,17 +1,30 @@
 {
-  "name": "powercalc-pakistan",
+  "name": "restaurant-pos-platform",
   "version": "1.0.0",
-  "description": "Electrical Load & Solar Sizing Calculator for Pakistan — mobile-first engineering web app",
-  "type": "module",
-  "private": true,
+  "description": "Multi-tenant Restaurant POS platform with a master admin panel for provisioning restaurant clients, real-time order/kitchen sync, and Hostinger deployment support.",
+  "main": "server.js",
+  "type": "commonjs",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test/*.test.js",
-    "test:watch": "node --test --watch test/*.test.js"
+    "dev": "node --watch server.js",
+    "seed": "node src/seed.js",
+    "test": "node --test"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=18.0.0"
   },
-  "keywords": ["electrical", "solar", "pv", "load-calculation", "cable-sizing", "pakistan", "boq"],
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^11.3.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^2.4.0",
+    "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.7.5"
+  },
   "license": "MIT"
 }

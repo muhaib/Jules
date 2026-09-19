@@ -1,49 +1,43 @@
-// Minimal zero-dependency static file server for local development.
-// Usage: npm start  ->  http://localhost:5173
-import http from 'node:http';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+require('dotenv').config();
 
-const ROOT = path.dirname(fileURLToPath(import.meta.url));
-const PORT = Number(process.env.PORT) || 5173;
+const path = require('path');
+const http = require('http');
+const express = require('express');
+const cors = require('cors');
 
-const MIME = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.ico': 'image/x-icon',
-  '.webmanifest': 'application/manifest+json',
-};
+const { initRealtime } = require('./src/realtime');
 
-const server = http.createServer((req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
-  let rel = decodeURIComponent(url.pathname);
-  if (rel === '/') rel = '/index.html';
+const app = express();
+const corsOrigins = (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
 
-  const filePath = path.join(ROOT, path.normalize(rel).replace(/^(\.\.[/\\])+/, ''));
-  if (!filePath.startsWith(ROOT)) {
-    res.writeHead(403).end('Forbidden');
-    return;
-  }
+app.use(cors({ origin: corsOrigins.length ? corsOrigins : true }));
+app.use(express.json());
 
-  fs.readFile(filePath, (err, data) => {
-    if (err) {
-      // Single-page app fallback: unknown paths serve index.html.
-      fs.readFile(path.join(ROOT, 'index.html'), (e2, html) => {
-        if (e2) res.writeHead(404).end('Not found');
-        else res.writeHead(200, { 'Content-Type': MIME['.html'] }).end(html);
-      });
-      return;
-    }
-    const type = MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
-    res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache' }).end(data);
-  });
+app.use('/api/auth', require('./src/routes/auth'));
+app.use('/api/admin', require('./src/routes/admin'));
+app.use('/api/menu', require('./src/routes/menu'));
+app.use('/api/tables', require('./src/routes/tables'));
+app.use('/api/orders', require('./src/routes/orders'));
+app.use('/api/staff', require('./src/routes/staff'));
+app.use('/api/reports', require('./src/routes/reports'));
+
+app.get('/healthz', (req, res) => res.json({ ok: true }));
+
+app.use(express.static(path.join(__dirname, 'public')));
+app.get(['/master', '/master/*'], (req, res) => res.sendFile(path.join(__dirname, 'public/master/index.html')));
+app.get(['/app', '/app/*'], (req, res) => res.sendFile(path.join(__dirname, 'public/app/index.html')));
+
+app.use((req, res) => res.status(404).json({ error: 'Not found' }));
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).json({ error: 'Internal server error' });
 });
 
-server.listen(PORT, () => {
-  console.log(`PowerCalc Pakistan running at http://localhost:${PORT}`);
+const httpServer = http.createServer(app);
+initRealtime(httpServer, corsOrigins);
+
+const PORT = process.env.PORT || 3000;
+httpServer.listen(PORT, () => {
+  console.log(`Restaurant POS platform listening on port ${PORT}`);
 });
