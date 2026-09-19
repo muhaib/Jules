@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { query } from './db.js';
@@ -65,6 +65,17 @@ export function checkPassword(plain, hash) {
   return bcrypt.compare(plain, hash);
 }
 
+/**
+ * A real bcrypt hash of a value nobody knows, compared against when the email
+ * does not exist so that login costs the same either way.
+ *
+ * It has to be a *valid* hash. A malformed placeholder makes `bcrypt.compare`
+ * return false immediately, which does not equalise the timing - it inverts
+ * it, turning a ~10x gap into a reliable account-enumeration oracle. That is
+ * exactly the bug this constant replaced. Computed once at startup (~80ms).
+ */
+export const DUMMY_PASSWORD_HASH = bcrypt.hashSync(randomBytes(32).toString('hex'), 10);
+
 // ---- site keys -------------------------------------------------------------
 // The key is shown once and stored only as a SHA-256 digest. It is a
 // high-entropy random string rather than a password, so a fast hash is the
@@ -82,12 +93,16 @@ export function hashSiteKey(key) {
   return createHash('sha256').update(key).digest('hex');
 }
 
-function safeEqualHex(a, b) {
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex'));
-}
-
-/** Authenticates a middleware instance and attaches `req.site`. */
+/**
+ * Authenticates a middleware instance and attaches `req.site`.
+ *
+ * The lookup is an indexed equality match on the SHA-256 digest of the key.
+ * There is no constant-time comparison here and none is needed: the key is 24
+ * random bytes, so there is no low-entropy secret to recover a byte at a time,
+ * and the timing of an index probe does not leak the digest. (An earlier
+ * version called timingSafeEqual on a value against itself, which did nothing
+ * but look reassuring.)
+ */
 export async function requireSiteKey(req, res, next) {
   const header = req.get('authorization') ?? '';
   const key = header.startsWith('Bearer ') ? header.slice(7).trim() : null;
@@ -99,9 +114,7 @@ export async function requireSiteKey(req, res, next) {
     'SELECT id, user_id, name, domain, policy FROM sites WHERE key_hash = $1',
     [hash],
   );
-  if (!rows.length || !safeEqualHex(hash, hashSiteKey(key))) {
-    return res.status(401).json({ error: 'invalid_site_key' });
-  }
+  if (!rows.length) return res.status(401).json({ error: 'invalid_site_key' });
   req.site = rows[0];
   return next();
 }

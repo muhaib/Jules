@@ -135,7 +135,16 @@ export async function createGuard(options = {}) {
 
   // ---- policy --------------------------------------------------------------
   const localPolicyConfig = config.policy ?? DEFAULT_POLICY;
-  const buildPolicy = (raw) => createPolicy(raw, { catalog: catalogStore.current });
+  // A policy arriving from the control plane may name a crawler this
+  // middleware's catalog does not have yet. Drop the rule and report it,
+  // rather than rejecting the whole policy and falling back to a stale one.
+  const buildPolicy = (raw, { tolerant = false } = {}) => createPolicy(raw, {
+    catalog: catalogStore.current,
+    ignoreUnknownRules: tolerant,
+    onUnknownRule: tolerant
+      ? (id) => onError(new Error(`policy rule for unknown crawler "${id}" ignored; the catalog may be out of date`))
+      : undefined,
+  });
   let policyRemote = null;
 
   if (config.policySource?.url) {
@@ -150,7 +159,7 @@ export async function createGuard(options = {}) {
           timeoutMs,
           headers: siteKey ? { authorization: `Bearer ${siteKey}` } : {},
         });
-        return buildPolicy(doc.policy ?? doc);
+        return buildPolicy(doc.policy ?? doc, { tolerant: true });
       },
     });
     await policyRemote.init();
@@ -196,6 +205,7 @@ export async function createGuard(options = {}) {
     inquiry: licensing.inquiryPath ?? DEFAULTS.inquiryPath,
   };
   const reserved = new Set(Object.values(paths));
+  let warnedAboutMissingIp = false;
 
   function presentIp(ip) {
     if (!ip) return null;
@@ -357,8 +367,11 @@ export async function createGuard(options = {}) {
 
     // Reserved paths are always reachable, including by a bot we are blocking:
     // a crawler that cannot read robots.txt or the licensing page has no way
-    // to comply or to get in touch, which defeats the point of both.
-    if (reserved.has(pathname)) {
+    // to comply or to get in touch, which defeats the point of both. This
+    // holds whether or not we answer the path ourselves - with `robots.serve`
+    // off, the request still has to reach the application that does serve it.
+    const isReserved = reserved.has(pathname);
+    if (isReserved) {
       if (pathname === paths.robots && config.robots?.serve && (method === 'GET' || method === 'HEAD')) {
         return {
           ...base,
@@ -400,6 +413,15 @@ export async function createGuard(options = {}) {
     if (!match) return base;
 
     const crawler = match.crawler;
+    if (!clientIp && !warnedAboutMissingIp) {
+      warnedAboutMissingIp = true;
+      onError(new Error(
+        'no client IP could be determined for an AI crawler request, so identity '
+        + 'verification cannot run and every check will return "unknown". Pass '
+        + '`socketIp` on the request, or set `trustProxy` so the forwarded '
+        + 'address is used (common on Next.js, where there is no socket address).',
+      ));
+    }
     let verification;
     if (verificationMode === 'background') {
       const cached = verifier.peek(clientIp, crawler);
@@ -414,7 +436,17 @@ export async function createGuard(options = {}) {
     }
 
     const policy = getPolicy();
-    const resolved = policy.resolve({ crawler, verification, pathname });
+    let resolved = policy.resolve({ crawler, verification, pathname });
+    if (isReserved && resolved.action !== 'allow' && resolved.action !== 'log') {
+      // The hit is still detected, verified and logged - it just cannot be
+      // withheld. Blocking robots.txt is self-defeating.
+      resolved = {
+        action: 'allow',
+        reason: `${resolved.reason}; served anyway because ${pathname} must stay reachable`,
+        source: 'reserved_path',
+        matchedPath: resolved.matchedPath,
+      };
+    }
 
     const decision = {
       ...base,

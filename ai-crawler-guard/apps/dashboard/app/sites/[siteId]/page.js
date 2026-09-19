@@ -28,10 +28,15 @@ function toDailySeries(timeline, from, to) {
   return [...buckets.values()].sort((a, b) => a.day.localeCompare(b.day));
 }
 
+const RANGES = [7, 30, 90];
+
 export default async function OverviewPage({ params, searchParams }) {
   const { siteId } = await params;
   const search = await searchParams;
-  const days = Number(search?.days ?? 30);
+  // A query string is user input. An unparseable or absurd value used to
+  // produce an Invalid Date and a 500 from toISOString().
+  const requested = Number(search?.days);
+  const days = RANGES.includes(requested) ? requested : 30;
   const to = new Date();
   const from = new Date(to.getTime() - days * DAY);
 
@@ -49,7 +54,7 @@ export default async function OverviewPage({ params, searchParams }) {
           <p className="sub">AI crawler traffic over the last {days} days.</p>
         </div>
         <span className="spacer" style={{ flex: 1 }} />
-        <RangePicker current={days} />
+        <RangePicker current={days} options={RANGES} />
       </div>
 
       <div className="tiles" style={{ marginBottom: 16 }}>

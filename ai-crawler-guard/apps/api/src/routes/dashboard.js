@@ -6,6 +6,19 @@ import { query } from '../db.js';
 import { catalog } from '../catalog.js';
 import { HttpError, clampInt, isUuid, parseDate, requireStr, str } from '../validate.js';
 
+/**
+ * Reading a stored policy is forgiving; writing one is not. A crawler that
+ * leaves the catalog must not make the policy tab and the middleware's policy
+ * poll return 500 for ever.
+ */
+function readStoredPolicy(site) {
+  return createPolicy(site.policy ?? {}, {
+    catalog: catalog(),
+    ignoreUnknownRules: true,
+    onUnknownRule: (id) => console.warn(`[policy] site ${site.id}: dropping rule for unknown crawler "${id}"`),
+  });
+}
+
 export const dashboardRouter = Router();
 dashboardRouter.use(requireUser);
 
@@ -100,8 +113,7 @@ dashboardRouter.post('/sites/:siteId/key', loadSite, async (req, res) => {
 });
 
 dashboardRouter.get('/sites/:siteId/policy', loadSite, (req, res) => {
-  const policy = createPolicy(req.site.policy ?? {}, { catalog: catalog() });
-  res.json({ policy: policy.toJSON() });
+  res.json({ policy: readStoredPolicy(req.site).toJSON() });
 });
 
 dashboardRouter.put('/sites/:siteId/policy', loadSite, async (req, res) => {
@@ -119,7 +131,7 @@ dashboardRouter.put('/sites/:siteId/policy', loadSite, async (req, res) => {
 });
 
 dashboardRouter.get('/sites/:siteId/robots.txt', loadSite, (req, res) => {
-  const policy = createPolicy(req.site.policy ?? {}, { catalog: catalog() });
+  const policy = readStoredPolicy(req.site);
   const origin = req.site.domain ? `https://${req.site.domain.replace(/^https?:\/\//, '')}` : null;
   const text = buildRobotsTxt({
     catalog: catalog(),

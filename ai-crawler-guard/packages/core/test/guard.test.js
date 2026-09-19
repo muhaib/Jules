@@ -332,3 +332,86 @@ test('a guard whose hosted catalog is down still starts and still enforces', asy
   assert.ok(errors.some((error) => /503/.test(error.message)));
   await guard.close();
 });
+
+test('a blocked crawler can reach robots.txt even when the guard does not serve it', async () => {
+  // Regression: with robots.serve off (the default), /robots.txt is served by
+  // the application, so the request has to get past the guard to reach it.
+  // Blocking it left blocked crawlers with no way to read the policy.
+  const { guard, events } = await makeGuard({ robots: undefined, policy: { defaultAction: 'block' } });
+  const decision = await guard.inspect(req({ url: '/robots.txt', headers: { 'user-agent': 'DnsBot/1.0' } }));
+  assert.equal(decision.response, null, 'the request passes through to the app');
+  assert.equal(decision.action, 'allow');
+  assert.equal(decision.source, 'reserved_path');
+  await guard.close();
+  assert.equal(events.length, 1, 'the hit is still detected and logged');
+  assert.equal(events[0].path, '/robots.txt');
+});
+
+test('the licensing endpoints stay reachable for a blocked crawler when licensing is off', async () => {
+  const { guard } = await makeGuard({ policy: { defaultAction: 'block' }, licensing: { enabled: false } });
+  for (const url of ['/.well-known/ai-licensing', '/.well-known/ai-licensing/inquiry']) {
+    const decision = await guard.inspect(req({ url, headers: { 'user-agent': 'DnsBot/1.0' } }));
+    assert.notEqual(decision.action, 'block', `${url} was blocked`);
+  }
+  await guard.close();
+});
+
+test('a site-wide path rule can tighten a crawler\'s outcome but never loosen it', async () => {
+  const { guard } = await makeGuard({
+    policy: {
+      defaultAction: 'log',
+      pathRules: [{ match: '/public/', action: 'allow' }, { match: '/internal/', action: 'block' }],
+      rules: { dnsbot: 'block', openbot: 'allow' },
+    },
+  });
+  const loosened = await guard.inspect(req({ url: '/public/x', headers: { 'user-agent': 'DnsBot/1.0' } }));
+  assert.equal(loosened.action, 'block', 'a generic allow must not un-block an explicitly blocked crawler');
+
+  const tightened = await guard.inspect(req({ url: '/internal/x', headers: { 'user-agent': 'OpenBot/1.0' } }));
+  assert.equal(tightened.action, 'block');
+  assert.equal(tightened.source, 'pathRules');
+  await guard.close();
+});
+
+test('a per-crawler path rule may still loosen that crawler\'s own action', async () => {
+  const { guard } = await makeGuard({
+    policy: { rules: { dnsbot: { action: 'block', paths: [{ match: '/press/', action: 'allow' }] } } },
+  });
+  const pressRoom = await guard.inspect(req({ url: '/press/release', headers: { 'user-agent': 'DnsBot/1.0' } }));
+  assert.equal(pressRoom.action, 'allow', 'block everything except the press room is a legitimate policy');
+  await guard.close();
+});
+
+test('a request with no resolvable client IP reports the problem once', async () => {
+  const errors = [];
+  const { guard } = await makeGuard({ policy: { defaultAction: 'log' }, onError: (e) => errors.push(e) });
+  // No socketIp and no trusted proxy: this is what a Next.js middleware looks
+  // like on Next 15, where NextRequest no longer carries `ip`.
+  await guard.inspect({ method: 'GET', url: '/', headers: { 'user-agent': 'DnsBot/1.0' } });
+  await guard.inspect({ method: 'GET', url: '/b', headers: { 'user-agent': 'DnsBot/1.0' } });
+  assert.equal(errors.length, 1, 'reported once, not once per request');
+  assert.match(errors[0].message, /no client IP/);
+  await guard.close();
+});
+
+test('a policy naming a crawler this catalog does not have is degraded, not rejected', async () => {
+  const errors = [];
+  const guard = await createGuard({
+    catalog: { source: CATALOG },
+    verification: { resolver: GOOD_DNS },
+    reporting: false,
+    policy: { defaultAction: 'log' },
+    policySource: { url: 'https://api.example.com/v1/policy', siteKey: 'k', refreshMs: 0 },
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({ policy: { defaultAction: 'log', rules: { dnsbot: 'block', retiredbot: 'block' } } }),
+    }),
+    onError: (error) => errors.push(error),
+  });
+  const decision = await guard.inspect({
+    method: 'GET', url: '/', headers: { 'user-agent': 'DnsBot/1.0' }, socketIp: '203.0.113.7',
+  });
+  assert.equal(decision.action, 'block', 'the rules that are still valid are applied');
+  assert.ok(errors.some((e) => /unknown crawler "retiredbot"/.test(e.message)));
+  await guard.close();
+});

@@ -161,9 +161,14 @@ days and the raw table only for today. Nothing in the API contract changes.
 replicas the effective limit is N× what you configured. It exists to stop a
 broken client, not to meter customers; for a real quota, move it to Redis.
 
-**Ingest is idempotent.** Each event carries a content fingerprint with a
-unique index, so a retried batch inserts nothing and the response says how many
-were duplicates. Retries are safe.
+**Ingest is idempotent.** Each event carries a content fingerprint — site,
+timestamp, crawler, path, IP, method — with a unique index, so a retried batch
+inserts nothing and the response says how many were duplicates. Retries are
+safe. The trade-off is at the other end: two *genuine* hits from the same
+address to the same path in the same millisecond are indistinguishable from a
+retry and count once. At crawl rates that produce sub-millisecond repeats on a
+single URL you are undercounting slightly; if that matters, add a client-side
+event id to the fingerprint.
 
 ## Security checklist before you point a real site at it
 

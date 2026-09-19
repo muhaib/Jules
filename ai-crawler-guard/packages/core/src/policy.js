@@ -11,6 +11,14 @@ import { ConfigError } from './errors.js';
 export const ACTIONS = /** @type {const} */ (['allow', 'log', 'license', 'block']);
 const ACTION_SET = new Set(ACTIONS);
 
+/**
+ * How restrictive each action is. Used in one place only: a site-wide path
+ * rule may make a crawler's outcome stricter, never looser. Without that, a
+ * generic `{ match: '/public/', action: 'allow' }` would silently un-block a
+ * crawler the owner had explicitly set to `block`.
+ */
+const SEVERITY = { allow: 0, log: 1, license: 2, block: 3 };
+
 export const DEFAULT_POLICY = Object.freeze({
   defaultAction: 'log',
   onSpoofed: 'block',
@@ -105,7 +113,7 @@ function normalizeRule(value, id) {
   return rule;
 }
 
-export function createPolicy(config = {}, { catalog } = {}) {
+export function createPolicy(config = {}, { catalog, ignoreUnknownRules = false, onUnknownRule } = {}) {
   const merged = { ...DEFAULT_POLICY, ...config };
   const policy = {
     defaultAction: assertAction(merged.defaultAction, 'defaultAction'),
@@ -118,6 +126,14 @@ export function createPolicy(config = {}, { catalog } = {}) {
 
   for (const [id, value] of Object.entries(merged.rules ?? {})) {
     if (catalog && !catalog.byId.has(id)) {
+      // Strict on the way in, forgiving on the way out. Rejecting a rule the
+      // owner is writing is helpful; refusing to load a policy that was valid
+      // when it was saved, because a crawler has since left the catalog,
+      // would take the whole site's policy offline over a stale key.
+      if (ignoreUnknownRules) {
+        onUnknownRule?.(id);
+        continue;
+      }
       throw new ConfigError(
         `no crawler with id ${JSON.stringify(id)} in the catalog; add it to crawlers.json first`,
         { path: `rules.${id}` },
@@ -153,18 +169,16 @@ export function createPolicy(config = {}, { catalog } = {}) {
     let source = null;
     let matchedPath = null;
 
+    // A per-crawler path rule is an explicit statement about this crawler on
+    // this path, so it wins outright and may loosen as well as tighten
+    // ("block ClaudeBot, except /press/").
     const botPath = rule ? matchPath(rule.paths, pathname) : null;
     if (botPath) {
       action = botPath.action;
       source = `rules.${crawler.id}.paths`;
       matchedPath = botPath.match;
     } else {
-      const globalPath = matchPath(policy.pathRules, pathname);
-      if (globalPath) {
-        action = globalPath.action;
-        source = 'pathRules';
-        matchedPath = globalPath.match;
-      } else if (rule?.action) {
+      if (rule?.action) {
         action = rule.action;
         source = `rules.${crawler.id}`;
       } else if (crawler.defaultAction) {
@@ -173,6 +187,14 @@ export function createPolicy(config = {}, { catalog } = {}) {
       } else {
         action = policy.defaultAction;
         source = 'defaultAction';
+      }
+      // A site-wide path rule says nothing about this crawler specifically,
+      // so it can only tighten what the crawler's own rule already decided.
+      const globalPath = matchPath(policy.pathRules, pathname);
+      if (globalPath && SEVERITY[globalPath.action] > SEVERITY[action]) {
+        action = globalPath.action;
+        source = 'pathRules';
+        matchedPath = globalPath.match;
       }
     }
 

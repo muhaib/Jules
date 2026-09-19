@@ -373,3 +373,65 @@ test('dashboard routes require a session', async () => {
   assert.equal((await call('/api/sites')).status, 401);
   assert.equal((await call('/api/crawlers')).status, 401);
 });
+
+test('login costs the same whether the account exists or not', async () => {
+  // Regression: the placeholder hash this guards against was malformed, so
+  // bcrypt.compare returned false in ~0ms for an unknown email against ~80ms
+  // for a real one - a reliable account-enumeration oracle.
+  const call = client(base);
+  await registerOwner(call, 'timing@test.local');
+
+  const time = async (email) => {
+    const started = process.hrtime.bigint();
+    const response = await call('/auth/login', { method: 'POST', json: { email, password: 'wrong-password-here' } });
+    assert.equal(response.status, 401);
+    return Number(process.hrtime.bigint() - started) / 1e6;
+  };
+
+  // Warm both paths so the first bcrypt call does not skew the measurement.
+  await time('timing@test.local');
+  await time('ghost@test.local');
+
+  const known = Math.min(await time('timing@test.local'), await time('timing@test.local'));
+  const unknown = Math.min(await time('ghost@test.local'), await time('ghost@test.local'));
+
+  // Both should be dominated by one bcrypt comparison. A generous bound: the
+  // unknown-account path must not be trivially faster. The bug produced a
+  // ratio near 0.1; a correct implementation sits near 1.
+  assert.ok(
+    unknown > known * 0.5,
+    `unknown-account login took ${unknown.toFixed(1)}ms vs ${known.toFixed(1)}ms for a known account`,
+  );
+});
+
+test('the dummy password hash is a real bcrypt hash', async () => {
+  const { DUMMY_PASSWORD_HASH } = await import('../src/auth.js');
+  assert.match(DUMMY_PASSWORD_HASH, /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/);
+  const bcrypt = (await import('bcryptjs')).default;
+  assert.equal(bcrypt.getRounds(DUMMY_PASSWORD_HASH), 10, 'a malformed hash would throw here');
+});
+
+test('a policy rule for a crawler the catalog no longer has is dropped, not fatal', async () => {
+  const call = client(base);
+  await registerOwner(call);
+  const { site, siteKey } = await createSite(call);
+
+  // Write a valid policy, then make it stale behind the API's back - exactly
+  // what happens when a crawler is removed from crawlers.json.
+  await call(`/api/sites/${site.id}/policy`, {
+    method: 'PUT', json: { policy: { defaultAction: 'log', rules: { gptbot: 'block' } } },
+  });
+  const { query } = await import('../src/db.js');
+  await query(
+    `UPDATE sites SET policy = jsonb_set(policy, '{rules,retiredbot}', '{"action":"block"}') WHERE id = $1`,
+    [site.id],
+  );
+
+  const pulled = await call('/v1/policy', { headers: withKey(siteKey) });
+  assert.equal(pulled.status, 200, 'the middleware poll still succeeds');
+  assert.equal(pulled.body.policy.rules.gptbot.action, 'block', 'valid rules survive');
+  assert.equal(pulled.body.policy.rules.retiredbot, undefined, 'the stale rule is dropped');
+
+  assert.equal((await call(`/api/sites/${site.id}/policy`)).status, 200);
+  assert.equal((await call(`/api/sites/${site.id}/robots.txt`)).status, 200);
+});

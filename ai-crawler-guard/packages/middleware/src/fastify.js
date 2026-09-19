@@ -1,10 +1,19 @@
 /**
  * Fastify plugin.
  *
- * Runs in `onRequest` so a blocked crawler never reaches routing, body
- * parsing or any route handler. The inquiry POST is the exception: it needs a
- * body, so it is handled in `preHandler` where Fastify has already parsed one.
+ * Everything runs in `onRequest`, which is before routing and before body
+ * parsing, so a blocked crawler never reaches a route handler and the
+ * licensing form works whatever content types the application has registered.
+ *
+ * That last part is why the inquiry body is read from `request.raw` rather
+ * than `request.body`: Fastify ships a JSON parser and nothing else, so an
+ * `application/x-www-form-urlencoded` POST - which is exactly what the
+ * licensing page submits - arrives unparsed unless the application happens to
+ * have registered @fastify/formbody. Reading the raw stream ourselves removes
+ * that dependency. `onRequest` is the only hook early enough to do it safely.
  */
+import { readNodeBody } from './body.js';
+
 export function fastifyAiCrawlerGuard(fastify, options, done) {
   const guard = options.guard;
   const onError = options.onError ?? fastify.log.error.bind(fastify.log);
@@ -15,40 +24,28 @@ export function fastifyAiCrawlerGuard(fastify, options, done) {
 
   const inquiryPath = guard.paths.inquiry;
 
-  const describe = (request) => ({
-    method: request.method,
-    url: request.url,
-    headers: request.headers,
-    socketIp: request.socket?.remoteAddress ?? request.raw?.socket?.remoteAddress,
-    body: request.body,
-  });
-
-  const send = (decision, reply) => {
-    reply
-      .code(decision.response.status)
-      .headers(decision.response.headers ?? {})
-      .send(decision.response.body);
-  };
-
   fastify.decorateRequest('aiCrawler', null);
 
   fastify.addHook('onRequest', async (request, reply) => {
-    if (request.method === 'POST' && request.url.split('?')[0] === inquiryPath) return;
+    const isInquiry = request.method === 'POST' && request.url.split('?')[0] === inquiryPath;
     try {
-      const decision = await guard.inspect(describe(request));
+      const decision = await guard.inspect({
+        method: request.method,
+        url: request.url,
+        headers: request.headers,
+        socketIp: request.socket?.remoteAddress ?? request.raw?.socket?.remoteAddress,
+        // Only the inquiry endpoint needs a body, and it is the one request
+        // the guard always answers itself, so the stream is never consumed
+        // out from under a route handler.
+        readBody: isInquiry ? () => readNodeBody(request.raw) : undefined,
+      });
       request.aiCrawler = decision;
-      if (decision.response) send(decision, reply);
-    } catch (error) {
-      onError(error);
-    }
-  });
-
-  fastify.addHook('preHandler', async (request, reply) => {
-    if (request.method !== 'POST' || request.url.split('?')[0] !== inquiryPath) return;
-    try {
-      const decision = await guard.inspect(describe(request));
-      request.aiCrawler = decision;
-      if (decision.response) send(decision, reply);
+      if (decision.response) {
+        reply
+          .code(decision.response.status)
+          .headers(decision.response.headers ?? {})
+          .send(decision.response.body);
+      }
     } catch (error) {
       onError(error);
     }
@@ -57,7 +54,7 @@ export function fastifyAiCrawlerGuard(fastify, options, done) {
   done();
 }
 
-// Let Fastify register this at the root scope rather than in a child context,
-// so the hooks apply to every route.
+// Register at the root scope rather than in a child context, so the hook
+// applies to every route.
 fastifyAiCrawlerGuard[Symbol.for('skip-override')] = true;
 fastifyAiCrawlerGuard[Symbol.for('fastify.display-name')] = 'ai-crawler-guard';

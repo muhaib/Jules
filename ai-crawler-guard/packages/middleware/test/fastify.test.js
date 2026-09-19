@@ -62,3 +62,39 @@ test('unmatched traffic is untouched', async () => {
   await app.close();
   await guard.close();
 });
+
+test('the licensing form works without @fastify/formbody registered', async () => {
+  // Regression: Fastify parses JSON and nothing else, so the form the
+  // licensing page actually submits arrived with an undefined body and the
+  // inquiry was rejected as invalid.
+  const received = [];
+  const { app, guard } = await build({ licensing: { onInquiry: async (i) => received.push(i) } });
+  const response = await app.inject({
+    method: 'POST',
+    url: '/.well-known/ai-licensing/inquiry',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    payload: 'name=Ann+Lee&email=ann%40lab.ai&intendedUse=training&message=full+archive',
+  });
+  assert.equal(response.statusCode, 202);
+  assert.equal(received.length, 1);
+  assert.equal(received[0].email, 'ann@lab.ai');
+  assert.equal(received[0].message, 'full archive');
+  await app.close();
+  await guard.close();
+});
+
+test('a body-carrying request the guard ignores is still readable by the route', async () => {
+  const guard = await createAiCrawlerGuard(guardOptions({ policy: { defaultAction: 'allow' } }));
+  const app = Fastify({ logger: false });
+  await app.register(guard.fastify, guard.fastifyOptions);
+  app.post('/echo', async (request) => request.body);
+  await app.ready();
+  const response = await app.inject({
+    method: 'POST', url: '/echo',
+    headers: { 'content-type': 'application/json' },
+    payload: { hello: 'world' },
+  });
+  assert.deepEqual(response.json(), { hello: 'world' }, 'the guard must not consume other request bodies');
+  await app.close();
+  await guard.close();
+});

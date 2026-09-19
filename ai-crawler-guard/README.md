@@ -126,6 +126,18 @@ export const config = { runtime: 'nodejs', matcher: '/:path*' };
 accordingly. The adapter degrades honestly: a missing resolver produces
 `unknown`, never a false `verified`.
 
+There is a second Next-specific trap. `NextRequest` no longer carries `.ip` in
+Next 15, and middleware has no socket address, so with the default
+`trustProxy: false` there is no address to verify and every check returns
+`unknown`. Set `trustProxy` to match your hosting (Vercel puts the client in
+`x-forwarded-for`), or pass your own extractor:
+
+```js
+guard.next({ ip: (request) => request.headers.get('x-real-ip') })
+```
+
+The guard reports this once through `onError` rather than failing quietly.
+
 ## The four actions
 
 | Action | What the crawler gets |
@@ -137,6 +149,22 @@ accordingly. The adapter degrades honestly: a missing resolver produces
 
 Every AI-crawler hit is logged whichever action applies — the point of the tool
 is knowing what is out there, not only what was stopped.
+
+Precedence, most specific first:
+
+1. A **per-crawler path rule** (`rules.claudebot.paths`) wins outright, and may
+   loosen as well as tighten — "block ClaudeBot everywhere except `/press/`" is
+   a legitimate policy.
+2. The **crawler's own action** (`rules.claudebot.action`).
+3. A **site-wide path rule** (`pathRules`), which can only make the outcome
+   *stricter*. It says nothing about any particular crawler, so a generic
+   `{ match: '/public/', action: 'allow' }` must not silently un-block a
+   crawler you explicitly blocked.
+4. The catalog's `defaultAction`, then the policy's `defaultAction`.
+
+`/robots.txt`, `/.well-known/ai-licensing` and the inquiry endpoint are never
+blocked, whatever the policy says and whether or not the middleware serves them
+itself. The hit is still detected and logged; it just cannot be withheld.
 
 ## Verifying that a crawler is what it claims
 

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import {
-  checkPassword, clearSession, hashPassword, issueSession, requireUser,
+  checkPassword, clearSession, DUMMY_PASSWORD_HASH, hashPassword, issueSession, requireUser,
 } from '../auth.js';
 import { query } from '../db.js';
 import { HttpError, requireEmail, requireStr, str } from '../validate.js';
@@ -34,11 +34,12 @@ authRouter.post('/login', async (req, res) => {
     [email],
   );
   const user = rows[0];
-  // Same response and roughly the same cost whether the account exists or the
-  // password is wrong, so the endpoint does not enumerate accounts.
+  // Same response and the same cost whether the account exists or the password
+  // is wrong: an unknown email still pays for one bcrypt comparison, against a
+  // real hash of a value nobody knows.
   const ok = user
     ? await checkPassword(password, user.password_hash)
-    : await checkPassword(password, '$2a$10$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalidin');
+    : await checkPassword(password, DUMMY_PASSWORD_HASH);
   if (!ok) throw new HttpError(401, 'invalid_credentials');
 
   issueSession(res, user);

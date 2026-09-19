@@ -146,9 +146,15 @@ ingestRouter.post('/inquiries', requireSiteKey, async (req, res) => {
 });
 
 ingestRouter.get('/policy', requireSiteKey, async (req, res) => {
-  // Validate on the way out so a middleware never receives a policy it will
-  // reject; a bad stored policy should surface here, not at the edge.
-  const policy = createPolicy(req.site.policy ?? {}, { catalog: catalog() });
+  // Compile on the way out so a middleware never receives a policy it will
+  // reject. Rules naming a crawler that has since left the catalog are
+  // dropped with a warning rather than failing the poll - a stale key must
+  // not take a site's whole policy offline.
+  const policy = createPolicy(req.site.policy ?? {}, {
+    catalog: catalog(),
+    ignoreUnknownRules: true,
+    onUnknownRule: (id) => console.warn(`[policy] site ${req.site.id}: dropping rule for unknown crawler "${id}"`),
+  });
   res.set('cache-control', 'no-store');
   return res.json({ siteId: req.site.id, policy: policy.toJSON(), catalogVersion: catalog().version });
 });
